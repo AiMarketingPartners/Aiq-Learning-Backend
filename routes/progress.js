@@ -12,23 +12,58 @@ const router = express.Router();
 // Mark lesson as completed
 router.post('/lesson-complete', authenticateToken, [
     body('courseId').isMongoId().withMessage('Valid course ID required'),
-    body('sectionIndex').isNumeric().withMessage('Valid section index required'),
-    body('lessonIndex').isNumeric().withMessage('Valid lesson index required'),
+    body('sectionId').optional().isMongoId().withMessage('Valid section ID required'),
+    body('lectureId').optional().isMongoId().withMessage('Valid lecture ID required'),
+    body('sectionIndex').optional().isNumeric().withMessage('Valid section index required'),
+    body('lessonIndex').optional().isNumeric().withMessage('Valid lesson index required'),
     body('timeSpent').optional().isNumeric().withMessage('Time spent must be a number'),
     handleValidationErrors
 ], async (req, res) => {
     try {
-        const { courseId, sectionIndex, lessonIndex, timeSpent } = req.body;
+        const { courseId, sectionId, lectureId, sectionIndex: providedSectionIndex, lessonIndex: providedLessonIndex, timeSpent } = req.body;
 
         // Find enrollment
         const enrollment = await Enrollment.findOne({
             user: req.user._id,
             course: courseId,
             isActive: true
-        });
+        }).populate('course');
 
         if (!enrollment) {
             return res.status(404).json({ message: 'Enrollment not found' });
+        }
+
+        // Determine sectionIndex and lessonIndex
+        let sectionIndex = providedSectionIndex;
+        let lessonIndex = providedLessonIndex;
+
+        // If IDs are provided instead of indices, find the indices
+        if ((sectionId || lectureId) && enrollment.course.sections) {
+            for (let sIdx = 0; sIdx < enrollment.course.sections.length; sIdx++) {
+                const section = enrollment.course.sections[sIdx];
+                
+                // If we have sectionId, check if this is the right section
+                if (sectionId && section._id.toString() === sectionId) {
+                    sectionIndex = sIdx;
+                }
+                
+                // If we have lectureId, find the lecture within sections
+                if (lectureId && section.lectures) {
+                    for (let lIdx = 0; lIdx < section.lectures.length; lIdx++) {
+                        const lecture = section.lectures[lIdx];
+                        if (lecture._id.toString() === lectureId) {
+                            sectionIndex = sIdx;
+                            lessonIndex = lIdx;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Validate that we have valid indices
+        if (sectionIndex === undefined || lessonIndex === undefined) {
+            return res.status(400).json({ message: 'Could not determine section and lesson indices' });
         }
 
         // Check if lesson already completed

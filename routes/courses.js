@@ -325,13 +325,13 @@ router.post('/draft',
                                     }
 
                                     // Handle quiz lectures properly
-                                    if (lecture.type === 'quiz' && lecture.questions) {
+                                    if (lecture.type === 'quiz') {
                                         // Convert frontend quiz format to backend format
-                                        const quizQuestions = lecture.questions.map(q => ({
-                                            question: q.text,
+                                        const quizQuestions = (lecture.questions || []).map(q => ({
+                                            question: q.text || '',
                                             type: q.type === 'single-choice' ? 'single' : 'multiple',
-                                            options: q.options.map(opt => opt.text),
-                                            correctAnswers: q.options
+                                            options: (q.options || []).map(opt => opt.text || ''),
+                                            correctAnswers: (q.options || [])
                                                 .map((opt, idx) => opt.isCorrect ? idx : null)
                                                 .filter(idx => idx !== null)
                                         }));
@@ -533,13 +533,13 @@ router.put('/:courseId/basic-info',
                                             }
 
                                             // Handle quiz lectures properly
-                                            if (lecture.type === 'quiz' && lecture.questions) {
+                                            if (lecture.type === 'quiz') {
                                                 // Convert frontend quiz format to backend format
-                                                const quizQuestions = lecture.questions.map(q => ({
-                                                    question: q.text,
+                                                const quizQuestions = (lecture.questions || []).map(q => ({
+                                                    question: q.text || '',
                                                     type: q.type === 'single-choice' ? 'single' : 'multiple',
-                                                    options: q.options.map(opt => opt.text),
-                                                    correctAnswers: q.options
+                                                    options: (q.options || []).map(opt => opt.text || ''),
+                                                    correctAnswers: (q.options || [])
                                                         .map((opt, idx) => opt.isCorrect ? idx : null)
                                                         .filter(idx => idx !== null)
                                                 }));
@@ -1130,6 +1130,10 @@ router.get('/:courseId',
                                 
                                 // Remove backend note object to avoid duplication
                                 delete lecture.note;
+                            } else if (lecture.type === 'note') {
+                                // DEBUG: Note lecture without note object - this indicates data wasn't saved correctly
+                                console.log('⚠️ Note lecture found without note object:', lecture.title);
+                                lecture.content = ''; // Ensure content field exists for frontend
                             }
                             return lecture;
                         });

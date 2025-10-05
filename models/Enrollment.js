@@ -46,15 +46,45 @@ const enrollmentSchema = new mongoose.Schema({
 // Compound index to ensure one enrollment per user per course
 enrollmentSchema.index({ user: 1, course: 1 }, { unique: true });
 
-// Calculate progress percentage
+// Calculate progress percentage based on duration
 enrollmentSchema.methods.calculateProgress = async function() {
     const course = await mongoose.model('Course').findById(this.course);
     if (!course) return 0;
     
-    const totalLessons = course.totalLessons;
-    const completedLessons = this.progress.completedLessons.length;
+    let totalDuration = 0;
+    let completedDuration = 0;
     
-    this.progress.overallProgress = totalLessons > 0 ? Math.round((completedLessons / totalLessons) * 100) : 0;
+    // Calculate total duration and completed duration from all sections and lectures
+    course.sections.forEach((section, sectionIndex) => {
+        if (section.lectures) {
+            section.lectures.forEach((lecture, lectureIndex) => {
+                // Add lecture duration to total (use video duration for videos, or duration field for others)
+                const lectureDuration = lecture.type === 'video' && lecture.video?.duration 
+                    ? lecture.video.duration 
+                    : lecture.duration || 0;
+                totalDuration += lectureDuration;
+                
+                // Check if this lecture is completed
+                const isCompleted = this.progress.completedLessons.some(
+                    completed => completed.sectionIndex === sectionIndex && completed.lessonIndex === lectureIndex
+                );
+                
+                if (isCompleted) {
+                    completedDuration += lectureDuration;
+                }
+            });
+        }
+    });
+    
+    // Calculate percentage based on duration (fallback to lesson count if no durations)
+    if (totalDuration > 0) {
+        this.progress.overallProgress = Math.round((completedDuration / totalDuration) * 100);
+    } else {
+        // Fallback to lesson count based calculation
+        const totalLessons = course.totalLessons;
+        const completedLessons = this.progress.completedLessons.length;
+        this.progress.overallProgress = totalLessons > 0 ? Math.round((completedLessons / totalLessons) * 100) : 0;
+    }
     
     // Mark as completed if 100%
     if (this.progress.overallProgress === 100 && !this.completedAt) {
