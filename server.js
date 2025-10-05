@@ -36,7 +36,8 @@ const corsOptions = {
     allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization']
 };
 
-app.use(cors(corsOptions));
+app.use(cors());
+app.options('*', cors());
 
 // Body parsing middleware
 app.use(express.json({ limit: '50mb' }));
