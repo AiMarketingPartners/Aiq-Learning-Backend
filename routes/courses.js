@@ -794,7 +794,7 @@ router.post('/:courseId/sections/:sectionId/lectures/:lectureId/upload-video',
                     { key: 'courseId', value: courseId },
                     { key: 'sectionId', value: sectionId },
                     { key: 'lectureId', value: lectureId },
-                    { key: 'instructor', value: req.user.name || 'Unknown' }
+                    { key: 'instructor', value: 'Open Upload' }
                 ]
             });
 
@@ -1350,10 +1350,10 @@ router.post('/upload-video',
                 return res.status(404).json({ message: 'Course not found' });
             }
 
-            // Verify instructor ownership
-            if (course.instructor.toString() !== req.user.id) {
-                return res.status(403).json({ message: 'Not authorized to update this course' });
-            }
+            // INSTRUCTOR OWNERSHIP VERIFICATION REMOVED - OPEN ACCESS
+            // if (course.instructor.toString() !== req.user.id) {
+            //     return res.status(403).json({ message: 'Not authorized to update this course' });
+            // }
 
             const sectionIdx = parseInt(sectionIndex);
             const lectureIdx = parseInt(lectureIndex);
