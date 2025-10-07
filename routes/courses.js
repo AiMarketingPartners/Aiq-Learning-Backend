@@ -1151,37 +1151,62 @@ router.get('/:courseId',
 );
 
 // Delete course
+// Specific rate limiter for delete operations
+const rateLimit = require('express-rate-limit');
+const deleteCourseLimit = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: process.env.NODE_ENV === 'production' ? 5 : 50, // 5 deletes per minute in prod, 50 in dev
+    message: {
+        error: 'Too many delete attempts. Please wait before trying again.',
+        retryAfter: '1 minute'
+    },
+    standardHeaders: true,
+    keyGenerator: (req) => `delete_${req.ip}_${req.user?._id}` // Rate limit per user+IP combination
+});
+
 router.delete('/:courseId',
     authenticateToken,
     requireVerifiedInstructor,
+    deleteCourseLimit,
     async (req, res) => {
         try {
             const { courseId } = req.params;
+            console.log(`🗑️ Delete course request for ID: ${courseId} by user: ${req.user._id}`);
             
             const course = await Course.findById(courseId);
             if (!course) {
+                console.log(`❌ Course not found: ${courseId}`);
                 return res.status(404).json({ message: 'Course not found' });
             }
 
             // Check ownership
             if (course.instructor.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+                console.log(`❌ Access denied for user ${req.user._id} to delete course ${courseId}`);
                 return res.status(403).json({ message: 'Access denied' });
             }
 
             // Don't allow deletion if course has enrollments
             const enrollmentCount = await Enrollment.countDocuments({ course: courseId });
+            console.log(`📊 Course ${courseId} has ${enrollmentCount} enrollments`);
+            
             if (enrollmentCount > 0) {
+                console.log(`⚠️ Cannot delete course ${courseId} - has ${enrollmentCount} active enrollments`);
                 return res.status(400).json({ 
-                    message: 'Cannot delete course with active enrollments' 
+                    error: 'COURSE_HAS_ENROLLMENTS',
+                    message: `Cannot delete course with active enrollments. This course has ${enrollmentCount} enrolled student${enrollmentCount > 1 ? 's' : ''}.`,
+                    enrollmentCount: enrollmentCount,
+                    suggestion: 'To delete this course, you must first unenroll all students or wait for them to complete the course.'
                 });
             }
 
+            console.log(`✅ Deleting course ${courseId}...`);
             await Course.findByIdAndDelete(courseId);
+            console.log(`✅ Course ${courseId} deleted successfully`);
 
             res.json({ message: 'Course deleted successfully' });
         } catch (error) {
-            console.error('Delete course error:', error);
-            res.status(500).json({ message: 'Failed to delete course' });
+            console.error(`❌ Delete course error for ${req.params.courseId}:`, error);
+            res.status(500).json({ message: 'Failed to delete course', error: error.message });
         }
     }
 );
