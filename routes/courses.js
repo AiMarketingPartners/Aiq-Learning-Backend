@@ -12,6 +12,21 @@ const { handleValidationErrors } = require('../middleware/validation');
 
 const router = express.Router();
 
+// Global CORS bypass middleware for all course routes
+router.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    res.header('Access-Control-Allow-Credentials', 'false');
+    
+    // Handle preflight OPTIONS request
+    if (req.method === 'OPTIONS') {
+        return res.status(200).send();
+    }
+    
+    next();
+});
+
 // Configure multer for file uploads
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
@@ -1572,5 +1587,20 @@ router.get('/upload-progress/:courseId/:sectionIndex/:lectureIndex',
         }, 5 * 60 * 1000);
     }
 );
+
+// Test endpoint to verify CORS bypass is working
+router.get('/cors-test', (req, res) => {
+    res.json({
+        message: 'CORS bypass is working!',
+        timestamp: new Date().toISOString(),
+        origin: req.headers.origin || 'No origin header',
+        userAgent: req.headers['user-agent'],
+        corsHeaders: {
+            'Access-Control-Allow-Origin': res.getHeader('Access-Control-Allow-Origin'),
+            'Access-Control-Allow-Methods': res.getHeader('Access-Control-Allow-Methods'),
+            'Access-Control-Allow-Headers': res.getHeader('Access-Control-Allow-Headers')
+        }
+    });
+});
 
 module.exports = router;
