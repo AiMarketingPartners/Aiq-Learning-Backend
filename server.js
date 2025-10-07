@@ -8,6 +8,11 @@ require('dotenv').config();
 
 const app = express();
 
+// Trust proxy in production (for rate limiting and IP detection)
+if (process.env.NODE_ENV === 'production') {
+    app.set('trust proxy', 1);
+}
+
 // Security middleware
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 app.use(compression());
@@ -22,6 +27,8 @@ const limiter = rateLimit({
     },
     standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
     legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+    // Production proxy configuration
+    trustProxy: process.env.NODE_ENV === 'production',
     // Add more detailed logging
     onLimitReached: (req) => {
         console.error(`🚫 Rate limit exceeded for IP: ${req.ip} - ${req.method} ${req.path}`);
@@ -72,11 +79,22 @@ app.use((req, res, next) => {
 
 // CORS configuration
 const allowedOrigins = [
-    'http://localhost:9002' // Your frontend development origin
+    'http://localhost:9002', // Your frontend development origin
+    'http://localhost:3000', // Common Next.js dev port
+    'http://localhost:3001'  // Alternative dev port
 ];
 
-if (process.env.NODE_ENV === 'production' && process.env.FRONTEND_URL) {
-    allowedOrigins.push(process.env.FRONTEND_URL);
+// Add production origins
+if (process.env.NODE_ENV === 'production') {
+    // Add common production patterns
+    if (process.env.FRONTEND_URL) {
+        allowedOrigins.push(process.env.FRONTEND_URL);
+    }
+    // Add additional production origins from environment variables
+    if (process.env.ALLOWED_ORIGINS) {
+        const additionalOrigins = process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim());
+        allowedOrigins.push(...additionalOrigins);
+    }
 }
 
 const corsOptions = {
@@ -84,11 +102,25 @@ const corsOptions = {
         // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin) return callback(null, true);
         
-        if (allowedOrigins.indexOf(origin) === -1) {
-            const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-            return callback(new Error(msg), false);
+        // In development, be more permissive
+        if (process.env.NODE_ENV !== 'production') {
+            // Allow localhost on any port in development
+            if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+                return callback(null, true);
+            }
         }
-        return callback(null, true);
+        
+        // Check allowed origins
+        if (allowedOrigins.indexOf(origin) !== -1) {
+            return callback(null, true);
+        }
+        
+        // Log the rejected origin for debugging
+        console.warn(`🚫 CORS rejected origin: ${origin}`);
+        console.log(`✅ Allowed origins: ${allowedOrigins.join(', ')}`);
+        
+        const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+        return callback(new Error(msg), false);
     },
     credentials: true,
     optionsSuccessStatus: 200, // Some legacy browsers choke on 204
