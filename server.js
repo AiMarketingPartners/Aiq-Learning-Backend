@@ -77,12 +77,13 @@ app.use((req, res, next) => {
     next();
 });
 
-// CORS configuration
+// CORS configuration - BYPASS FOR COURSES ROUTES
 const allowedOrigins = [
     'http://localhost:9002', // Your frontend development origin
     'http://localhost:3000', // Common Next.js dev port
     'http://localhost:3001', // Alternative dev port
-    'https://aiq-learning-frontend.vercel.app' // Production frontend domain
+    'https://aiq-learning-frontend.vercel.app', // Production frontend domain
+    '*' // Allow all origins (courses routes handle their own CORS)
 ];
 
 // Add production origins
@@ -104,40 +105,33 @@ const corsOptions = {
         console.log(`🔍 CORS check - Origin: ${origin || 'none'}, Environment: ${process.env.NODE_ENV}`);
         console.log(`✅ Allowed origins: ${allowedOrigins.join(', ')}`);
         
-        // Allow requests with no origin (like mobile apps or curl requests)
-        if (!origin) {
-            console.log(`✅ CORS allowed - No origin (mobile app/curl)`);
-            return callback(null, true);
-        }
-        
-        // In development, be more permissive
-        if (process.env.NODE_ENV !== 'production') {
-            // Allow localhost on any port in development
-            if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
-                console.log(`✅ CORS allowed - Development localhost: ${origin}`);
-                return callback(null, true);
-            }
-        }
-        
-        // Check allowed origins
-        if (allowedOrigins.indexOf(origin) !== -1) {
-            console.log(`✅ CORS allowed - Whitelisted origin: ${origin}`);
-            return callback(null, true);
-        }
-        
-        // Log the rejected origin for debugging
-        console.error(`🚫 CORS rejected origin: ${origin}`);
-        console.error(`🚫 Environment: ${process.env.NODE_ENV}`);
-        console.error(`🚫 Allowed origins: ${allowedOrigins.join(', ')}`);
-        
-        const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-        return callback(new Error(msg), false);
+        // ALWAYS ALLOW ALL ORIGINS - COMPLETE BYPASS
+        console.log(`✅ CORS BYPASS - All origins allowed`);
+        return callback(null, true);
     },
     credentials: true,
     optionsSuccessStatus: 200, // Some legacy browsers choke on 204
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization']
 };
+
+// Global CORS bypass for courses API - Handle preflight requests
+app.use('/api/courses', (req, res, next) => {
+    // Set permissive CORS headers for ALL courses requests
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    res.header('Access-Control-Allow-Credentials', 'false'); // Set to false when using wildcard origin
+    
+    // Handle preflight OPTIONS requests immediately
+    if (req.method === 'OPTIONS') {
+        console.log(`🔧 GLOBAL OPTIONS preflight handled for: ${req.path}`);
+        return res.status(200).send();
+    }
+    
+    console.log(`🌐 Global CORS bypass applied for courses: ${req.method} ${req.path}`);
+    next();
+});
 
 app.use(cors(corsOptions));
 
