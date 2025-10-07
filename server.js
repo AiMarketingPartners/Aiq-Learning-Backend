@@ -166,6 +166,21 @@ app.get('/health', (req, res) => {
     });
 });
 
+// Public CORS Test Endpoint
+app.get('/api/cors-test', (req, res) => {
+    // This endpoint is public and should not require authentication
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET');
+    res.header('Access-Control-Allow-Headers', 'Content-Type');
+    
+    res.status(200).json({
+        message: 'CORS test successful! This is a public endpoint.',
+        timestamp: new Date().toISOString(),
+        origin: req.headers.origin || 'No origin header',
+        server: 'Express'
+    });
+});
+
 // Routes
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/users', require('./routes/users'));

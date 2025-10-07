@@ -731,8 +731,8 @@ router.options('/:courseId/sections/:sectionId/lectures/:lectureId/upload-video'
 
 // Upload video for lecture
 router.post('/:courseId/sections/:sectionId/lectures/:lectureId/upload-video',
-    authenticateToken,
-    requireVerifiedInstructor,
+    // authenticateToken, // REMOVED
+    // requireVerifiedInstructor, // REMOVED
     upload.fields([
         { name: 'video', maxCount: 1 },
         { name: 'thumbnail', maxCount: 1 }
@@ -1307,8 +1307,8 @@ router.options('/upload-video', (req, res) => {
 });
 
 router.post('/upload-video', 
-    authenticateToken,
-    requireVerifiedInstructor,
+    // authenticateToken, // REMOVED
+    // requireVerifiedInstructor, // REMOVED
     videoUpload.fields([
         { name: 'video', maxCount: 1 },
         { name: 'thumbnail', maxCount: 1 }
@@ -1521,20 +1521,21 @@ router.post('/upload-video',
 router.get('/upload-progress/:courseId/:sectionIndex/:lectureIndex', 
     (req, res) => {
         const { courseId, sectionIndex, lectureIndex } = req.params;
-        const { token } = req.query;
+        // const { token } = req.query; // REMOVED
         
-        // Verify token from query parameter
-        if (!token) {
-            return res.status(401).json({ message: 'Token required' });
-        }
+        // NO MORE TOKEN VERIFICATION - COMPLETELY OPEN
+        // if (!token) {
+        //     return res.status(401).json({ message: 'Token required' });
+        // }
         
-        try {
-            const jwt = require('jsonwebtoken');
-            const decoded = jwt.verify(token, process.env.JWT_SECRET);
-            req.user = decoded;
-        } catch (error) {
-            return res.status(401).json({ message: 'Invalid token' });
-        }
+        // JWT VERIFICATION COMPLETELY REMOVED
+        // try {
+        //     const jwt = require('jsonwebtoken');
+        //     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        //     req.user = decoded;
+        // } catch (error) {
+        //     return res.status(401).json({ message: 'Invalid token' });
+        // }
         
         const progressKey = `${courseId}-${sectionIndex}-${lectureIndex}`;
         
@@ -1588,19 +1589,19 @@ router.get('/upload-progress/:courseId/:sectionIndex/:lectureIndex',
     }
 );
 
-// Test endpoint to verify CORS bypass is working
-router.get('/cors-test', (req, res) => {
-    res.json({
-        message: 'CORS bypass is working!',
-        timestamp: new Date().toISOString(),
-        origin: req.headers.origin || 'No origin header',
-        userAgent: req.headers['user-agent'],
-        corsHeaders: {
-            'Access-Control-Allow-Origin': res.getHeader('Access-Control-Allow-Origin'),
-            'Access-Control-Allow-Methods': res.getHeader('Access-Control-Allow-Methods'),
-            'Access-Control-Allow-Headers': res.getHeader('Access-Control-Allow-Headers')
-        }
-    });
-});
+// This endpoint is now handled globally in server.js
+// router.get('/cors-test', (req, res) => {
+//     res.json({
+//         message: 'CORS bypass is working!',
+//         timestamp: new Date().toISOString(),
+//         origin: req.headers.origin || 'No origin header',
+//         userAgent: req.headers['user-agent'],
+//         corsHeaders: {
+//             'Access-Control-Allow-Origin': res.getHeader('Access-Control-Allow-Origin'),
+//             'Access-Control-Allow-Methods': res.getHeader('Access-Control-Allow-Methods'),
+//             'Access-Control-Allow-Headers': res.getHeader('Access-Control-Allow-Headers')
+//         }
+//     });
+// });
 
 module.exports = router;
