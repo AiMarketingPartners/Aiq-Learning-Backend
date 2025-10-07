@@ -45,7 +45,7 @@ const storage = multer.diskStorage({
 const upload = multer({
     storage,
     limits: {
-        fileSize: 50 * 1024 * 1024 // 50MB limit for demo videos
+        fileSize: 5 * 1024 * 1024 * 1024 // 5GB limit for course files
     },
     fileFilter: (req, file, cb) => {
         if (file.fieldname === 'demoVideo') {
@@ -1257,7 +1257,7 @@ router.get('/test-apivideo',
 const videoUpload = multer({
     storage: multer.memoryStorage(),
     limits: {
-        fileSize: 500 * 1024 * 1024 // 500MB limit for lecture videos
+        fileSize: 5 * 1024 * 1024 * 1024 // 5GB limit for lecture videos
     },
     fileFilter: (req, file, cb) => {
         if (file.fieldname === 'video' && file.mimetype.startsWith('video/')) {
