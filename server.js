@@ -81,7 +81,8 @@ app.use((req, res, next) => {
 const allowedOrigins = [
     'http://localhost:9002', // Your frontend development origin
     'http://localhost:3000', // Common Next.js dev port
-    'http://localhost:3001'  // Alternative dev port
+    'http://localhost:3001', // Alternative dev port
+    'https://aiq-learning-frontend.vercel.app' // Production frontend domain
 ];
 
 // Add production origins
@@ -99,25 +100,35 @@ if (process.env.NODE_ENV === 'production') {
     
 const corsOptions = {
     origin: function (origin, callback) {
+        // Debug logging
+        console.log(`🔍 CORS check - Origin: ${origin || 'none'}, Environment: ${process.env.NODE_ENV}`);
+        console.log(`✅ Allowed origins: ${allowedOrigins.join(', ')}`);
+        
         // Allow requests with no origin (like mobile apps or curl requests)
-        if (!origin) return callback(null, true);
+        if (!origin) {
+            console.log(`✅ CORS allowed - No origin (mobile app/curl)`);
+            return callback(null, true);
+        }
         
         // In development, be more permissive
         if (process.env.NODE_ENV !== 'production') {
             // Allow localhost on any port in development
             if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+                console.log(`✅ CORS allowed - Development localhost: ${origin}`);
                 return callback(null, true);
             }
         }
         
         // Check allowed origins
         if (allowedOrigins.indexOf(origin) !== -1) {
+            console.log(`✅ CORS allowed - Whitelisted origin: ${origin}`);
             return callback(null, true);
         }
         
         // Log the rejected origin for debugging
-        console.warn(`🚫 CORS rejected origin: ${origin}`);
-        console.log(`✅ Allowed origins: ${allowedOrigins.join(', ')}`);
+        console.error(`🚫 CORS rejected origin: ${origin}`);
+        console.error(`🚫 Environment: ${process.env.NODE_ENV}`);
+        console.error(`🚫 Allowed origins: ${allowedOrigins.join(', ')}`);
         
         const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
         return callback(new Error(msg), false);
