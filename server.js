@@ -12,32 +12,91 @@ const app = express();
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 app.use(compression());
 
-// Rate limiting
+// Rate limiting with different rules for development and production
 const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100 // limit each IP to 100 requests per windowMs
+    windowMs: process.env.NODE_ENV === 'production' ? 15 * 60 * 1000 : 60 * 1000, // 15 minutes in prod, 1 minute in dev
+    max: process.env.NODE_ENV === 'production' ? 100 : 1000, // 100 requests per 15min in prod, 1000 per minute in dev
+    message: {
+        error: 'Too many requests from this IP, please try again later.',
+        retryAfter: process.env.NODE_ENV === 'production' ? '15 minutes' : '1 minute'
+    },
+    standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+    legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+    // Add more detailed logging
+    onLimitReached: (req) => {
+        console.error(`🚫 Rate limit exceeded for IP: ${req.ip} - ${req.method} ${req.path}`);
+        console.error(`🚫 Rate limit details: ${req.rateLimit ? `${req.rateLimit.used}/${req.rateLimit.limit} requests` : 'unknown'}`);
+    },
+    // Skip rate limiting for certain routes
+    skip: (req) => {
+        // Always skip rate limiting for health checks
+        if (req.path === '/health' || req.path === '/api/health') {
+            return true;
+        }
+        
+        if (process.env.NODE_ENV !== 'production') {
+            // Skip rate limiting for static files in development
+            return req.path.includes('/static') || req.path.includes('/favicon');
+        }
+        return false;
+    }
 });
 app.use(limiter);
 
-// Request logging middleware
+// Request logging and tracking middleware
+let requestCount = {};
 app.use((req, res, next) => {
-    console.log(`${new Date().toISOString()} - ${req.method} ${req.path} - Origin: ${req.headers.origin || 'none'}`);
+    const clientId = req.ip;
+    const now = Date.now();
+    
+    // Clean up old entries (older than 5 minutes)
+    if (requestCount[clientId]) {
+        requestCount[clientId] = requestCount[clientId].filter(timestamp => now - timestamp < 5 * 60 * 1000);
+    } else {
+        requestCount[clientId] = [];
+    }
+    
+    requestCount[clientId].push(now);
+    
+    // Log requests with frequency info
+    const recentRequests = requestCount[clientId].length;
+    const logLevel = recentRequests > 50 ? '🔥' : recentRequests > 20 ? '⚠️' : '📝';
+    
+    console.log(`${logLevel} ${new Date().toISOString()} - ${req.method} ${req.path} - Origin: ${req.headers.origin || 'none'} - Recent requests: ${recentRequests}`);
+    
+    // Add rate limit info to response headers for debugging
+    res.set('X-Debug-Request-Count', recentRequests.toString());
+    
     next();
 });
 
 // CORS configuration
+const allowedOrigins = [
+    'http://localhost:9002' // Your frontend development origin
+];
+
+if (process.env.NODE_ENV === 'production' && process.env.FRONTEND_URL) {
+    allowedOrigins.push(process.env.FRONTEND_URL);
+}
+
 const corsOptions = {
-    origin: process.env.NODE_ENV === 'production' 
-        ? process.env.FRONTEND_URL || 'https://yourdomain.com'
-        : true, // Allow all origins in development
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) return callback(null, true);
+        
+        if (allowedOrigins.indexOf(origin) === -1) {
+            const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+            return callback(new Error(msg), false);
+        }
+        return callback(null, true);
+    },
     credentials: true,
     optionsSuccessStatus: 200, // Some legacy browsers choke on 204
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization']
 };
 
-app.use(cors());
-app.options('*', cors());
+app.use(cors(corsOptions));
 
 // Body parsing middleware
 app.use(express.json({ limit: '50mb' }));
@@ -82,7 +141,24 @@ app.use('/api/videos', require('./routes/videos'));
 app.use('/api/cart', require('./routes/cart'));
 app.use('/api/wishlist', require('./routes/wishlist'));
 
-// Health check
+// Health check endpoints (excluded from rate limiting)
+app.get('/health', (req, res) => {
+    const clientId = req.ip;
+    const recentRequests = requestCount[clientId] ? requestCount[clientId].length : 0;
+    
+    res.json({ 
+        status: 'OK', 
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        environment: process.env.NODE_ENV || 'development',
+        rateLimitInfo: {
+            recentRequests: recentRequests,
+            maxRequestsInDev: 1000,
+            maxRequestsInProd: 100
+        }
+    });
+});
+
 app.get('/api/health', (req, res) => {
     res.json({ 
         status: 'OK', 
@@ -90,6 +166,18 @@ app.get('/api/health', (req, res) => {
         uptime: process.uptime()
     });
 });
+
+// Development-only endpoint to reset rate limits
+if (process.env.NODE_ENV !== 'production') {
+    app.post('/api/dev/reset-rate-limits', (req, res) => {
+        requestCount = {};
+        console.log('🔄 Rate limit counters reset');
+        res.json({ 
+            message: 'Rate limit counters reset', 
+            timestamp: new Date().toISOString() 
+        });
+    });
+}
 
 // 404 handler
 app.use('*', (req, res) => {

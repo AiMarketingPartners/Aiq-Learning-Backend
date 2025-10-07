@@ -1151,37 +1151,62 @@ router.get('/:courseId',
 );
 
 // Delete course
+// Specific rate limiter for delete operations
+const rateLimit = require('express-rate-limit');
+const deleteCourseLimit = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: process.env.NODE_ENV === 'production' ? 5 : 50, // 5 deletes per minute in prod, 50 in dev
+    message: {
+        error: 'Too many delete attempts. Please wait before trying again.',
+        retryAfter: '1 minute'
+    },
+    standardHeaders: true,
+    keyGenerator: (req) => `delete_${req.ip}_${req.user?._id}` // Rate limit per user+IP combination
+});
+
 router.delete('/:courseId',
     authenticateToken,
     requireVerifiedInstructor,
+    deleteCourseLimit,
     async (req, res) => {
         try {
             const { courseId } = req.params;
+            console.log(`🗑️ Delete course request for ID: ${courseId} by user: ${req.user._id}`);
             
             const course = await Course.findById(courseId);
             if (!course) {
+                console.log(`❌ Course not found: ${courseId}`);
                 return res.status(404).json({ message: 'Course not found' });
             }
 
             // Check ownership
             if (course.instructor.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+                console.log(`❌ Access denied for user ${req.user._id} to delete course ${courseId}`);
                 return res.status(403).json({ message: 'Access denied' });
             }
 
             // Don't allow deletion if course has enrollments
             const enrollmentCount = await Enrollment.countDocuments({ course: courseId });
+            console.log(`📊 Course ${courseId} has ${enrollmentCount} enrollments`);
+            
             if (enrollmentCount > 0) {
+                console.log(`⚠️ Cannot delete course ${courseId} - has ${enrollmentCount} active enrollments`);
                 return res.status(400).json({ 
-                    message: 'Cannot delete course with active enrollments' 
+                    error: 'COURSE_HAS_ENROLLMENTS',
+                    message: `Cannot delete course with active enrollments. This course has ${enrollmentCount} enrolled student${enrollmentCount > 1 ? 's' : ''}.`,
+                    enrollmentCount: enrollmentCount,
+                    suggestion: 'To delete this course, you must first unenroll all students or wait for them to complete the course.'
                 });
             }
 
+            console.log(`✅ Deleting course ${courseId}...`);
             await Course.findByIdAndDelete(courseId);
+            console.log(`✅ Course ${courseId} deleted successfully`);
 
             res.json({ message: 'Course deleted successfully' });
         } catch (error) {
-            console.error('Delete course error:', error);
-            res.status(500).json({ message: 'Failed to delete course' });
+            console.error(`❌ Delete course error for ${req.params.courseId}:`, error);
+            res.status(500).json({ message: 'Failed to delete course', error: error.message });
         }
     }
 );
@@ -1308,6 +1333,12 @@ router.post('/upload-video',
                 lectureType: lecture.type
             });
 
+            // Initialize progress tracking
+            const progressKey = `${courseId}-${sectionIndex}-${lectureIndex}`;
+            global.uploadProgress = global.uploadProgress || {};
+            global.uploadProgress[progressKey] = 0;
+            console.log('📹 Initialized progress tracking for:', progressKey);
+
             // Check if lecture already has a video
             const existingVideoId = lecture.video?.apiVideoId;
             
@@ -1318,50 +1349,41 @@ router.post('/upload-video',
             let uploadResult;
             
             if (existingVideoId) {
-                console.log('📹 Updating existing video:', existingVideoId);
+                console.log('📹 Replacing existing video:', existingVideoId);
                 
-                // Update existing video metadata
-                const updateResult = await videoService.updateVideo(existingVideoId, {
+                // Replace video file by creating new video and deleting old one
+                const videoData = {
                     title: `${course.title} - ${section.title} - ${lecture.title}`,
-                    description: lecture.description || `Lecture video for ${course.title}`
-                });
+                    description: lecture.description || `Lecture video for ${course.title}`,
+                    isPublic: false,
+                    tags: [`course-${courseId}`, `section-${sectionIndex}`, `lecture-${lectureIndex}`]
+                };
                 
-                if (!updateResult.success) {
-                    console.warn('Failed to update video metadata, but continuing with upload:', updateResult.error);
-                }
-                
-                // Upload new video file to existing video ID
-                uploadResult = await videoService.uploadVideo(
-                    existingVideoId, 
+                uploadResult = await videoService.replaceVideoFile(
+                    existingVideoId,
+                    videoData,
                     videoFile.buffer,
-                    videoFile.originalname
+                    videoFile.originalname,
+                    (event) => {
+                        const progress = (event.currentChunk / event.chunksCount) * 100;
+                        console.log(`📹 API.video upload progress: ${progress.toFixed(1)}%`);
+                        
+                        // Store progress in a way that can be accessed by SSE endpoint
+                        global.uploadProgress = global.uploadProgress || {};
+                        global.uploadProgress[`${courseId}-${sectionIndex}-${lectureIndex}`] = progress;
+                    },
+                    true // Delete old video
                 );
                 
-                console.log('📹 Video file updated successfully:', uploadResult);
+                console.log('📹 Video file replaced successfully:', uploadResult);
                 
-                // Get updated video info
-                const getVideoResult = await videoService.getVideo(existingVideoId);
-                if (getVideoResult.success) {
+                if (uploadResult.success) {
                     videoResult = { 
                         success: true, 
-                        video: { 
-                            videoId: existingVideoId, 
-                            ...getVideoResult.video 
-                        } 
+                        video: uploadResult.video
                     };
                 } else {
-                    // Fallback: create video result with existing ID
-                    videoResult = {
-                        success: true,
-                        video: {
-                            videoId: existingVideoId,
-                            embedUrl: `https://embed.api.video/vod/${existingVideoId}`,
-                            playerUrl: `https://embed.api.video/vod/${existingVideoId}`,
-                            hlsUrl: `https://cdn.api.video/vod/${existingVideoId}/hls/manifest.m3u8`,
-                            mp4Url: `https://cdn.api.video/vod/${existingVideoId}/mp4/source.mp4`,
-                            thumbnailUrl: `https://cdn.api.video/vod/${existingVideoId}/thumbnail.jpg`
-                        }
-                    };
+                    videoResult = uploadResult;
                 }
             } else {
                 console.log('📹 Creating new video...');
@@ -1378,14 +1400,21 @@ router.post('/upload-video',
 
                 console.log('📹 Created new api.video entry:', videoResult.video.videoId);
 
-                // Upload the video file
-                uploadResult = await videoService.uploadVideo(
-                    videoResult.video.videoId, 
-                    videoFile.buffer,
-                    videoFile.originalname
-                );
-
-                console.log('📹 Video uploaded successfully:', uploadResult);
+            // Upload the video file with progress tracking
+            uploadResult = await videoService.uploadVideo(
+                videoResult.video.videoId, 
+                videoFile.buffer,
+                videoFile.originalname,
+                (event) => {
+                    const progress = (event.currentChunk / event.chunksCount) * 100;
+                    console.log(`📹 API.video upload progress: ${progress.toFixed(1)}%`);
+                    
+                    // Store progress in a way that can be accessed by SSE endpoint
+                    // We'll use a simple in-memory store for now
+                    global.uploadProgress = global.uploadProgress || {};
+                    global.uploadProgress[`${courseId}-${sectionIndex}-${lectureIndex}`] = progress;
+                }
+            );                console.log('📹 Video uploaded successfully:', uploadResult);
             }
 
             // Upload thumbnail if provided
@@ -1426,6 +1455,11 @@ router.post('/upload-video',
 
             console.log('📹 Course updated with video data');
 
+            // Set final progress to 100%
+            global.uploadProgress = global.uploadProgress || {};
+            global.uploadProgress[progressKey] = 100;
+            console.log('📹 Upload complete - progress set to 100%');
+
             res.json({
                 message: 'Video uploaded successfully',
                 videoData,
@@ -1439,6 +1473,77 @@ router.post('/upload-video',
                 error: error.message
             });
         }
+    }
+);
+
+// Server-Sent Events endpoint for upload progress (with query parameter auth)
+router.get('/upload-progress/:courseId/:sectionIndex/:lectureIndex', 
+    (req, res) => {
+        const { courseId, sectionIndex, lectureIndex } = req.params;
+        const { token } = req.query;
+        
+        // Verify token from query parameter
+        if (!token) {
+            return res.status(401).json({ message: 'Token required' });
+        }
+        
+        try {
+            const jwt = require('jsonwebtoken');
+            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            req.user = decoded;
+        } catch (error) {
+            return res.status(401).json({ message: 'Invalid token' });
+        }
+        
+        const progressKey = `${courseId}-${sectionIndex}-${lectureIndex}`;
+        
+        // Set headers for Server-Sent Events
+        res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'Access-Control-Allow-Origin': req.headers.origin || '*',
+            'Access-Control-Allow-Credentials': 'true'
+        });
+
+        // Send initial progress
+        global.uploadProgress = global.uploadProgress || {};
+        const initialProgress = global.uploadProgress[progressKey] || 0;
+        res.write(`data: ${JSON.stringify({ progress: initialProgress })}\n\n`);
+
+        console.log(`📹 Progress tracking started for ${progressKey}, initial: ${initialProgress}%`);
+
+        // Set up interval to check for progress updates
+        const progressInterval = setInterval(() => {
+            const currentProgress = global.uploadProgress[progressKey];
+            if (currentProgress !== undefined) {
+                res.write(`data: ${JSON.stringify({ progress: currentProgress })}\n\n`);
+                
+                // If upload is complete, clean up and close connection
+                if (currentProgress >= 100) {
+                    delete global.uploadProgress[progressKey];
+                    clearInterval(progressInterval);
+                    res.write(`data: ${JSON.stringify({ progress: 100, complete: true })}\n\n`);
+                    console.log(`📹 Progress tracking completed for ${progressKey}`);
+                    res.end();
+                }
+            }
+        }, 500); // Check every 500ms
+
+        // Clean up on client disconnect
+        req.on('close', () => {
+            clearInterval(progressInterval);
+            delete global.uploadProgress[progressKey];
+            console.log(`📹 Progress tracking connection closed for ${progressKey}`);
+        });
+
+        // Timeout after 5 minutes
+        setTimeout(() => {
+            clearInterval(progressInterval);
+            delete global.uploadProgress[progressKey];
+            console.log(`📹 Progress tracking timeout for ${progressKey}`);
+            res.end();
+        }, 5 * 60 * 1000);
     }
 );
 
