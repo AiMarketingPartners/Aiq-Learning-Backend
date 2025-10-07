@@ -1308,6 +1308,12 @@ router.post('/upload-video',
                 lectureType: lecture.type
             });
 
+            // Initialize progress tracking
+            const progressKey = `${courseId}-${sectionIndex}-${lectureIndex}`;
+            global.uploadProgress = global.uploadProgress || {};
+            global.uploadProgress[progressKey] = 0;
+            console.log('📹 Initialized progress tracking for:', progressKey);
+
             // Check if lecture already has a video
             const existingVideoId = lecture.video?.apiVideoId;
             
@@ -1330,11 +1336,19 @@ router.post('/upload-video',
                     console.warn('Failed to update video metadata, but continuing with upload:', updateResult.error);
                 }
                 
-                // Upload new video file to existing video ID
+                // Upload new video file to existing video ID with progress tracking
                 uploadResult = await videoService.uploadVideo(
                     existingVideoId, 
                     videoFile.buffer,
-                    videoFile.originalname
+                    videoFile.originalname,
+                    (event) => {
+                        const progress = (event.currentChunk / event.chunksCount) * 100;
+                        console.log(`📹 API.video upload progress: ${progress.toFixed(1)}%`);
+                        
+                        // Store progress in a way that can be accessed by SSE endpoint
+                        global.uploadProgress = global.uploadProgress || {};
+                        global.uploadProgress[`${courseId}-${sectionIndex}-${lectureIndex}`] = progress;
+                    }
                 );
                 
                 console.log('📹 Video file updated successfully:', uploadResult);
@@ -1378,14 +1392,21 @@ router.post('/upload-video',
 
                 console.log('📹 Created new api.video entry:', videoResult.video.videoId);
 
-                // Upload the video file
-                uploadResult = await videoService.uploadVideo(
-                    videoResult.video.videoId, 
-                    videoFile.buffer,
-                    videoFile.originalname
-                );
-
-                console.log('📹 Video uploaded successfully:', uploadResult);
+            // Upload the video file with progress tracking
+            uploadResult = await videoService.uploadVideo(
+                videoResult.video.videoId, 
+                videoFile.buffer,
+                videoFile.originalname,
+                (event) => {
+                    const progress = (event.currentChunk / event.chunksCount) * 100;
+                    console.log(`📹 API.video upload progress: ${progress.toFixed(1)}%`);
+                    
+                    // Store progress in a way that can be accessed by SSE endpoint
+                    // We'll use a simple in-memory store for now
+                    global.uploadProgress = global.uploadProgress || {};
+                    global.uploadProgress[`${courseId}-${sectionIndex}-${lectureIndex}`] = progress;
+                }
+            );                console.log('📹 Video uploaded successfully:', uploadResult);
             }
 
             // Upload thumbnail if provided
@@ -1426,6 +1447,11 @@ router.post('/upload-video',
 
             console.log('📹 Course updated with video data');
 
+            // Set final progress to 100%
+            global.uploadProgress = global.uploadProgress || {};
+            global.uploadProgress[progressKey] = 100;
+            console.log('📹 Upload complete - progress set to 100%');
+
             res.json({
                 message: 'Video uploaded successfully',
                 videoData,
@@ -1439,6 +1465,77 @@ router.post('/upload-video',
                 error: error.message
             });
         }
+    }
+);
+
+// Server-Sent Events endpoint for upload progress (with query parameter auth)
+router.get('/upload-progress/:courseId/:sectionIndex/:lectureIndex', 
+    (req, res) => {
+        const { courseId, sectionIndex, lectureIndex } = req.params;
+        const { token } = req.query;
+        
+        // Verify token from query parameter
+        if (!token) {
+            return res.status(401).json({ message: 'Token required' });
+        }
+        
+        try {
+            const jwt = require('jsonwebtoken');
+            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            req.user = decoded;
+        } catch (error) {
+            return res.status(401).json({ message: 'Invalid token' });
+        }
+        
+        const progressKey = `${courseId}-${sectionIndex}-${lectureIndex}`;
+        
+        // Set headers for Server-Sent Events
+        res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'Access-Control-Allow-Origin': req.headers.origin || '*',
+            'Access-Control-Allow-Credentials': 'true'
+        });
+
+        // Send initial progress
+        global.uploadProgress = global.uploadProgress || {};
+        const initialProgress = global.uploadProgress[progressKey] || 0;
+        res.write(`data: ${JSON.stringify({ progress: initialProgress })}\n\n`);
+
+        console.log(`📹 Progress tracking started for ${progressKey}, initial: ${initialProgress}%`);
+
+        // Set up interval to check for progress updates
+        const progressInterval = setInterval(() => {
+            const currentProgress = global.uploadProgress[progressKey];
+            if (currentProgress !== undefined) {
+                res.write(`data: ${JSON.stringify({ progress: currentProgress })}\n\n`);
+                
+                // If upload is complete, clean up and close connection
+                if (currentProgress >= 100) {
+                    delete global.uploadProgress[progressKey];
+                    clearInterval(progressInterval);
+                    res.write(`data: ${JSON.stringify({ progress: 100, complete: true })}\n\n`);
+                    console.log(`📹 Progress tracking completed for ${progressKey}`);
+                    res.end();
+                }
+            }
+        }, 500); // Check every 500ms
+
+        // Clean up on client disconnect
+        req.on('close', () => {
+            clearInterval(progressInterval);
+            delete global.uploadProgress[progressKey];
+            console.log(`📹 Progress tracking connection closed for ${progressKey}`);
+        });
+
+        // Timeout after 5 minutes
+        setTimeout(() => {
+            clearInterval(progressInterval);
+            delete global.uploadProgress[progressKey];
+            console.log(`📹 Progress tracking timeout for ${progressKey}`);
+            res.end();
+        }, 5 * 60 * 1000);
     }
 );
 
