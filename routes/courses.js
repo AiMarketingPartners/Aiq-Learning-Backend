@@ -706,6 +706,14 @@ router.post('/:courseId/sections',
     }
 );
 
+// Handle preflight OPTIONS request for lecture video upload
+router.options('/:courseId/sections/:sectionId/lectures/:lectureId/upload-video', (req, res) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    res.status(200).send();
+});
+
 // Upload video for lecture
 router.post('/:courseId/sections/:sectionId/lectures/:lectureId/upload-video',
     authenticateToken,
@@ -715,6 +723,11 @@ router.post('/:courseId/sections/:sectionId/lectures/:lectureId/upload-video',
         { name: 'thumbnail', maxCount: 1 }
     ]),
     async (req, res) => {
+        // Set CORS headers to allow all origins
+        res.header('Access-Control-Allow-Origin', '*');
+        res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+        res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+        
         console.log('🎥 VIDEO UPLOAD REQUEST RECEIVED');
         console.log('Course ID:', req.params.courseId);
         console.log('Section ID:', req.params.sectionId);
@@ -1270,6 +1283,14 @@ const videoUpload = multer({
     }
 });
 
+// Handle preflight OPTIONS request for upload-video
+router.options('/upload-video', (req, res) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    res.status(200).send();
+});
+
 router.post('/upload-video', 
     authenticateToken,
     requireVerifiedInstructor,
@@ -1278,6 +1299,11 @@ router.post('/upload-video',
         { name: 'thumbnail', maxCount: 1 }
     ]),
     async (req, res) => {
+        // Set CORS headers to allow all origins
+        res.header('Access-Control-Allow-Origin', '*');
+        res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+        res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+        
         try {
             const { courseId, sectionIndex, lectureIndex } = req.body;
             const videoFile = req.files.video?.[0];
