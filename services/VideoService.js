@@ -280,12 +280,73 @@ class VideoService {
                     embedUrl: video.assets.iframe,
                     playerUrl: video.assets.player,
                     thumbnailUrl: video.assets.thumbnail,
+                    hlsUrl: video.assets.hls,
+                    mp4Url: video.assets.mp4,
+                    duration: video.duration || 0,
                     tags: video.tags,
                     metadata: video.metadata
                 }
             };
         } catch (error) {
             console.error('Error updating video:', error);
+            return {
+                success: false,
+                error: error.message
+            };
+        }
+    }
+
+    /**
+     * Replace video file by creating new video and optionally deleting old one
+     * @param {string} oldVideoId - Existing video ID (will be deleted if replaceFile is true)
+     * @param {Object} videoData - Video metadata for new video
+     * @param {string|Buffer} filePathOrBuffer - Path to video file or Buffer
+     * @param {string} filename - Original filename (when using buffer)
+     * @param {Function} progressCallback - Progress callback function
+     * @param {boolean} deleteOld - Whether to delete the old video
+     * @returns {Object} New video object
+     */
+    async replaceVideoFile(oldVideoId, videoData, filePathOrBuffer, filename = null, progressCallback = null, deleteOld = true) {
+        try {
+            // Create new video with same metadata
+            const createResult = await this.createVideo(videoData);
+            
+            if (!createResult.success) {
+                return createResult;
+            }
+
+            const newVideoId = createResult.video.videoId;
+
+            // Upload new video file
+            const uploadResult = await this.uploadVideo(
+                newVideoId,
+                filePathOrBuffer,
+                filename,
+                progressCallback
+            );
+
+            if (!uploadResult.success) {
+                // Cleanup: delete the newly created video if upload failed
+                await this.deleteVideo(newVideoId);
+                return uploadResult;
+            }
+
+            // Delete old video if requested
+            if (deleteOld && oldVideoId) {
+                const deleteResult = await this.deleteVideo(oldVideoId);
+                if (!deleteResult.success) {
+                    console.warn('Failed to delete old video:', deleteResult.error);
+                }
+            }
+
+            return {
+                success: true,
+                video: uploadResult.video,
+                oldVideoId: oldVideoId,
+                newVideoId: newVideoId
+            };
+        } catch (error) {
+            console.error('Error replacing video file:', error);
             return {
                 success: false,
                 error: error.message

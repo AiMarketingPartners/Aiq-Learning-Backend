@@ -1324,21 +1324,19 @@ router.post('/upload-video',
             let uploadResult;
             
             if (existingVideoId) {
-                console.log('📹 Updating existing video:', existingVideoId);
+                console.log('📹 Replacing existing video:', existingVideoId);
                 
-                // Update existing video metadata
-                const updateResult = await videoService.updateVideo(existingVideoId, {
+                // Replace video file by creating new video and deleting old one
+                const videoData = {
                     title: `${course.title} - ${section.title} - ${lecture.title}`,
-                    description: lecture.description || `Lecture video for ${course.title}`
-                });
+                    description: lecture.description || `Lecture video for ${course.title}`,
+                    isPublic: false,
+                    tags: [`course-${courseId}`, `section-${sectionIndex}`, `lecture-${lectureIndex}`]
+                };
                 
-                if (!updateResult.success) {
-                    console.warn('Failed to update video metadata, but continuing with upload:', updateResult.error);
-                }
-                
-                // Upload new video file to existing video ID with progress tracking
-                uploadResult = await videoService.uploadVideo(
-                    existingVideoId, 
+                uploadResult = await videoService.replaceVideoFile(
+                    existingVideoId,
+                    videoData,
                     videoFile.buffer,
                     videoFile.originalname,
                     (event) => {
@@ -1348,34 +1346,19 @@ router.post('/upload-video',
                         // Store progress in a way that can be accessed by SSE endpoint
                         global.uploadProgress = global.uploadProgress || {};
                         global.uploadProgress[`${courseId}-${sectionIndex}-${lectureIndex}`] = progress;
-                    }
+                    },
+                    true // Delete old video
                 );
                 
-                console.log('📹 Video file updated successfully:', uploadResult);
+                console.log('📹 Video file replaced successfully:', uploadResult);
                 
-                // Get updated video info
-                const getVideoResult = await videoService.getVideo(existingVideoId);
-                if (getVideoResult.success) {
+                if (uploadResult.success) {
                     videoResult = { 
                         success: true, 
-                        video: { 
-                            videoId: existingVideoId, 
-                            ...getVideoResult.video 
-                        } 
+                        video: uploadResult.video
                     };
                 } else {
-                    // Fallback: create video result with existing ID
-                    videoResult = {
-                        success: true,
-                        video: {
-                            videoId: existingVideoId,
-                            embedUrl: `https://embed.api.video/vod/${existingVideoId}`,
-                            playerUrl: `https://embed.api.video/vod/${existingVideoId}`,
-                            hlsUrl: `https://cdn.api.video/vod/${existingVideoId}/hls/manifest.m3u8`,
-                            mp4Url: `https://cdn.api.video/vod/${existingVideoId}/mp4/source.mp4`,
-                            thumbnailUrl: `https://cdn.api.video/vod/${existingVideoId}/thumbnail.jpg`
-                        }
-                    };
+                    videoResult = uploadResult;
                 }
             } else {
                 console.log('📹 Creating new video...');
