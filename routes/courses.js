@@ -1497,12 +1497,42 @@ router.get('/upload-progress/:courseId/:sectionIndex/:lectureIndex',
         
         const progressKey = `${courseId}-${sectionIndex}-${lectureIndex}`;
         
+        // Validate origin for CORS
+        const allowedOrigins = [
+            'http://localhost:9002',
+            'http://localhost:3000',
+            'http://localhost:3001'
+        ];
+        
+        // Add production origins
+        if (process.env.NODE_ENV === 'production') {
+            if (process.env.FRONTEND_URL) {
+                allowedOrigins.push(process.env.FRONTEND_URL);
+            }
+            if (process.env.ALLOWED_ORIGINS) {
+                const additionalOrigins = process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim());
+                allowedOrigins.push(...additionalOrigins);
+            }
+        }
+        
+        const origin = req.headers.origin;
+        let allowOrigin = '*';
+        
+        // In development, allow any localhost
+        if (process.env.NODE_ENV !== 'production' && origin && (origin.includes('localhost') || origin.includes('127.0.0.1'))) {
+            allowOrigin = origin;
+        } else if (origin && allowedOrigins.includes(origin)) {
+            allowOrigin = origin;
+        } else if (process.env.NODE_ENV !== 'production') {
+            allowOrigin = '*';
+        }
+        
         // Set headers for Server-Sent Events
         res.writeHead(200, {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive',
-            'Access-Control-Allow-Origin': req.headers.origin || '*',
+            'Access-Control-Allow-Origin': allowOrigin,
             'Access-Control-Allow-Credentials': 'true'
         });
 
