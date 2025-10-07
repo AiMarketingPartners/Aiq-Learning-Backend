@@ -1516,7 +1516,7 @@ router.get('/upload-progress/:courseId/:sectionIndex/:lectureIndex',
         }
         
         const origin = req.headers.origin;
-        let allowOrigin = '*';
+        let allowOrigin = null;
         
         // In development, allow any localhost
         if (process.env.NODE_ENV !== 'production' && origin && (origin.includes('localhost') || origin.includes('127.0.0.1'))) {
@@ -1525,6 +1525,11 @@ router.get('/upload-progress/:courseId/:sectionIndex/:lectureIndex',
             allowOrigin = origin;
         } else if (process.env.NODE_ENV !== 'production') {
             allowOrigin = '*';
+        } else {
+            // Production: reject if origin doesn't match
+            console.error(`🚫 SSE CORS rejected origin: ${origin}`);
+            console.error(`🚫 Allowed origins: ${allowedOrigins.join(', ')}`);
+            return res.status(403).json({ message: 'CORS: Origin not allowed for SSE' });
         }
         
         // Set headers for Server-Sent Events
