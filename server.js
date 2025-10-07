@@ -96,7 +96,7 @@ if (process.env.NODE_ENV === 'production') {
         allowedOrigins.push(...additionalOrigins);
     }
 }
-
+    
 const corsOptions = {
     origin: function (origin, callback) {
         // Allow requests with no origin (like mobile apps or curl requests)
