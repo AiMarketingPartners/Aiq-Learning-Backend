@@ -12,20 +12,20 @@ const { handleValidationErrors } = require('../middleware/validation');
 
 const router = express.Router();
 
-// Global CORS bypass middleware for all course routes
-router.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-    res.header('Access-Control-Allow-Credentials', 'false');
+// CORS is now handled by Nginx - removed from Node.js
+// router.use((req, res, next) => {
+//     res.header('Access-Control-Allow-Origin', '*');
+//     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+//     res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+//     res.header('Access-Control-Allow-Credentials', 'false');
     
-    // Handle preflight OPTIONS request
-    if (req.method === 'OPTIONS') {
-        return res.status(200).send();
-    }
+//     // Handle preflight OPTIONS request
+//     if (req.method === 'OPTIONS') {
+//         return res.status(200).send();
+//     }
     
-    next();
-});
+//     next();
+// });
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({

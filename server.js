@@ -115,25 +115,25 @@ const corsOptions = {
     allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization']
 };
 
-// Global CORS bypass for courses API - Handle preflight requests
-app.use('/api/courses', (req, res, next) => {
-    // Set permissive CORS headers for ALL courses requests
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-    res.header('Access-Control-Allow-Credentials', 'false'); // Set to false when using wildcard origin
+// CORS now handled by Nginx - removed from Node.js
+// app.use('/api/courses', (req, res, next) => {
+//     // Set permissive CORS headers for ALL courses requests
+//     res.header('Access-Control-Allow-Origin', '*');
+//     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+//     res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+//     res.header('Access-Control-Allow-Credentials', 'false'); // Set to false when using wildcard origin
     
-    // Handle preflight OPTIONS requests immediately
-    if (req.method === 'OPTIONS') {
-        console.log(`🔧 GLOBAL OPTIONS preflight handled for: ${req.path}`);
-        return res.status(200).send();
-    }
+//     // Handle preflight OPTIONS requests immediately
+//     if (req.method === 'OPTIONS') {
+//         console.log(`🔧 GLOBAL OPTIONS preflight handled for: ${req.path}`);
+//         return res.status(200).send();
+//     }
     
-    console.log(`🌐 Global CORS bypass applied for courses: ${req.method} ${req.path}`);
-    next();
-});
+//     console.log(`🌐 Global CORS bypass applied for courses: ${req.method} ${req.path}`);
+//     next();
+// });
 
-app.use(cors(corsOptions));
+// app.use(cors(corsOptions)); // DISABLED - Nginx handles CORS
 
 // Body parsing middleware  
 app.use(express.json({ limit: '5gb' }));
