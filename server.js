@@ -41,6 +41,17 @@ const limiter = rateLimit({
             return true;
         }
         
+        // CRITICAL: Skip rate limiting for upload progress endpoints
+        if (req.path.includes('/upload-progress') || req.path.includes('/progress-status')) {
+            console.log('🚀 Skipping rate limit for progress endpoint:', req.path);
+            return true;
+        }
+        
+        // Skip rate limiting for SSE endpoints
+        if (req.path.includes('/test-sse')) {
+            return true;
+        }
+        
         if (process.env.NODE_ENV !== 'production') {
             // Skip rate limiting for static files in development
             return req.path.includes('/static') || req.path.includes('/favicon');
