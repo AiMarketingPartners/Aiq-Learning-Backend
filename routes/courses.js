@@ -1823,6 +1823,37 @@ const corsForSSE = (req, res, next) => {
     next();
 };
 
+// Alternative route for combined progress key format (courseId-sectionIndex-lectureIndex)
+router.get('/upload-progress/:progressKey', 
+    corsForSSE,
+    (req, res) => {
+        const { progressKey } = req.params;
+        
+        // Parse the combined key format: courseId-sectionIndex-lectureIndex
+        const parts = progressKey.split('-');
+        if (parts.length < 3) {
+            return res.status(400).json({ 
+                message: 'Invalid progress key format. Expected: courseId-sectionIndex-lectureIndex' 
+            });
+        }
+        
+        // Extract courseId, sectionIndex, lectureIndex
+        const lectureIndex = parts.pop(); // Last part
+        const sectionIndex = parts.pop(); // Second to last part  
+        const courseId = parts.join('-'); // Everything else (in case courseId has dashes)
+        
+        console.log(`📹 SSE progress key parsed:`, {
+            originalKey: progressKey,
+            courseId,
+            sectionIndex,
+            lectureIndex
+        });
+
+        handleSSEProgress(req, res, progressKey, courseId, sectionIndex, lectureIndex);
+    }
+);
+
+// Original route for backward compatibility
 router.get('/upload-progress/:courseId/:sectionIndex/:lectureIndex', 
     corsForSSE,
     (req, res) => {
@@ -1845,10 +1876,16 @@ router.get('/upload-progress/:courseId/:sectionIndex/:lectureIndex',
         
         const progressKey = `${courseId}-${sectionIndex}-${lectureIndex}`;
         
-        console.log(`📹 SSE connection request for progress tracking: ${progressKey}`);
-        console.log(`📹 Request headers:`, req.headers);
-        
-        // Set headers for Server-Sent Events (allow all origins)
+        handleSSEProgress(req, res, progressKey, courseId, sectionIndex, lectureIndex);
+    }
+);
+
+// Reusable SSE progress handler function
+function handleSSEProgress(req, res, progressKey, courseId, sectionIndex, lectureIndex) {
+    console.log(`📹 SSE connection request for progress tracking: ${progressKey}`);
+    console.log(`📹 Request headers:`, req.headers);
+    
+    // Set headers for Server-Sent Events (allow all origins)
         res.writeHead(200, {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache',
@@ -1920,8 +1957,7 @@ router.get('/upload-progress/:courseId/:sectionIndex/:lectureIndex',
             console.log(`📹 SSE Progress tracking timeout for ${progressKey}`);
             res.end();
         }, 5 * 60 * 1000);
-    }
-);
+}
 
 // Simple SSE test endpoint
 router.get('/test-sse', 
@@ -1961,6 +1997,36 @@ router.get('/test-sse',
         req.on('close', () => {
             clearInterval(testInterval);
             console.log('📹 SSE Test connection closed');
+        });
+    }
+);
+
+// Milestone-based progress endpoint (simpler than SSE)
+router.get('/progress-milestone/:progressKey', 
+    corsForSSE,
+    (req, res) => {
+        const { progressKey } = req.params;
+        
+        global.uploadProgress = global.uploadProgress || {};
+        const currentProgress = global.uploadProgress[progressKey] || 0;
+        
+        // Convert progress to milestones (20, 40, 60, 80, 90, 100)
+        let milestone = 0;
+        if (currentProgress >= 100) milestone = 100;
+        else if (currentProgress >= 90) milestone = 90;
+        else if (currentProgress >= 80) milestone = 80;
+        else if (currentProgress >= 60) milestone = 60;
+        else if (currentProgress >= 40) milestone = 40;
+        else if (currentProgress >= 20) milestone = 20;
+        else if (currentProgress > 0) milestone = 10; // Small progress indicator
+        
+        console.log(`📹 Milestone check: ${progressKey} - progress: ${currentProgress}% -> milestone: ${milestone}%`);
+        
+        res.json({
+            milestone: milestone,
+            rawProgress: currentProgress,
+            key: progressKey,
+            timestamp: new Date().toISOString()
         });
     }
 );
