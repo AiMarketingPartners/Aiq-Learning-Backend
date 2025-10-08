@@ -115,25 +115,13 @@ const corsOptions = {
     allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization']
 };
 
-// CORS now handled by Nginx - removed from Node.js
-// app.use('/api/courses', (req, res, next) => {
-//     // Set permissive CORS headers for ALL courses requests
-//     res.header('Access-Control-Allow-Origin', '*');
-//     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-//     res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-//     res.header('Access-Control-Allow-Credentials', 'false'); // Set to false when using wildcard origin
-    
-//     // Handle preflight OPTIONS requests immediately
-//     if (req.method === 'OPTIONS') {
-//         console.log(`🔧 GLOBAL OPTIONS preflight handled for: ${req.path}`);
-//         return res.status(200).send();
-//     }
-    
-//     console.log(`🌐 Global CORS bypass applied for courses: ${req.method} ${req.path}`);
-//     next();
-// });
-
-// app.use(cors(corsOptions)); // DISABLED - Nginx handles CORS
+// Environment-based CORS: Only enable in development (production uses Nginx)
+if (process.env.NODE_ENV === 'development') {
+    console.log('🔧 Development mode: Enabling Node.js CORS');
+    app.use(cors(corsOptions));
+} else {
+    console.log('🔧 Production mode: CORS handled by Nginx');
+}
 
 // Body parsing middleware  
 app.use(express.json({ limit: '5gb' }));
@@ -192,6 +180,7 @@ app.use('/api/certificates', require('./routes/certificates'));
 app.use('/api/videos', require('./routes/videos'));
 app.use('/api/cart', require('./routes/cart'));
 app.use('/api/wishlist', require('./routes/wishlist'));
+app.use('/api/quiz', require('./routes/quiz'));
 
 // Health check endpoints (excluded from rate limiting)
 app.get('/health', (req, res) => {
