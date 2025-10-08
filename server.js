@@ -42,7 +42,7 @@ const limiter = rateLimit({
         }
         
         // CRITICAL: Skip rate limiting for upload progress endpoints
-        if (req.path.includes('/upload-progress') || req.path.includes('/progress-status')) {
+        if (req.path.includes('/upload-progress') || req.path.includes('/progress-status') || req.path.includes('/progress-milestone')) {
             console.log('🚀 Skipping rate limit for progress endpoint:', req.path);
             return true;
         }
