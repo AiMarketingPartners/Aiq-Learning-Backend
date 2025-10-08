@@ -12,20 +12,23 @@ const { handleValidationErrors } = require('../middleware/validation');
 
 const router = express.Router();
 
-// CORS is now handled by Nginx - removed from Node.js
-// router.use((req, res, next) => {
-//     res.header('Access-Control-Allow-Origin', '*');
-//     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-//     res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-//     res.header('Access-Control-Allow-Credentials', 'false');
-    
-//     // Handle preflight OPTIONS request
-//     if (req.method === 'OPTIONS') {
-//         return res.status(200).send();
-//     }
-    
-//     next();
-// });
+// Environment-based CORS for courses: Only in development (production uses Nginx)
+if (process.env.NODE_ENV === 'development') {
+    router.use((req, res, next) => {
+        res.header('Access-Control-Allow-Origin', '*');
+        res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+        res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+        res.header('Access-Control-Allow-Credentials', 'false');
+        
+        // Handle preflight OPTIONS request
+        if (req.method === 'OPTIONS') {
+            return res.status(200).send();
+        }
+        
+        next();
+    });
+    console.log('🔧 Development CORS enabled for courses router');
+}
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -465,6 +468,235 @@ router.post('/draft',
             console.error('Create draft course error:', error);
             res.status(500).json({ 
                 message: 'Failed to create course draft',
+                error: process.env.NODE_ENV === 'development' ? error.message : undefined
+            });
+        }
+    }
+);
+
+// Update draft course (handles full course updates)
+router.put('/:courseId/draft',
+    authenticateToken,
+    requireVerifiedInstructor,
+    upload.fields([
+        { name: 'thumbnail', maxCount: 1 },
+        { name: 'banner', maxCount: 1 },
+        { name: 'demoVideo', maxCount: 1 }
+    ]),
+    [
+        body('title').notEmpty().withMessage('Title is required'),
+        body('description').notEmpty().withMessage('Description is required'),
+        body('category').notEmpty().withMessage('Category is required'),
+        body('price').isFloat({ min: 0 }).withMessage('Price must be a positive number'),
+        body('whatYouWillLearn').custom((value) => {
+            const parsed = JSON.parse(value);
+            if (!Array.isArray(parsed) || parsed.length === 0) {
+                throw new Error('At least one learning objective is required');
+            }
+            return true;
+        })
+    ],
+    handleValidationErrors,
+    async (req, res) => {
+        try {
+            const { courseId } = req.params;
+            const {
+                title,
+                description,
+                category,
+                price,
+                whatYouWillLearn,
+                requirements
+            } = req.body;
+
+            // Find existing course
+            const course = await Course.findById(courseId);
+            if (!course) {
+                return res.status(404).json({ message: 'Course not found' });
+            }
+
+            // Check ownership
+            if (course.instructor.toString() !== req.user._id.toString()) {
+                return res.status(403).json({ message: 'Access denied' });
+            }
+
+            // Verify category exists
+            const categoryDoc = await Category.findById(category);
+            if (!categoryDoc) {
+                return res.status(400).json({ message: 'Invalid category' });
+            }
+
+            // Update course data
+            course.title = title;
+            course.description = description;
+            course.shortDescription = description.length > 200 ? description.substring(0, 200) + '...' : description;
+            course.category = category;
+            course.level = req.body.level || course.level || 'beginner';
+            course.price = parseFloat(price);
+            course.originalPrice = parseFloat(price);
+            course.whatYouWillLearn = JSON.parse(whatYouWillLearn);
+            course.requirements = requirements ? JSON.parse(requirements) : [];
+
+            // Handle sections if provided
+            if (req.body.sections) {
+                try {
+                    let sections = JSON.parse(req.body.sections);
+                    if (Array.isArray(sections)) {
+                        sections = sections.map((section, sectionIndex) => {
+                            // Ensure section has order field
+                            if (!section.order) {
+                                section.order = sectionIndex + 1;
+                            }
+                            
+                            // Ensure lectures have order field and proper structure
+                            if (section.lectures && Array.isArray(section.lectures)) {
+                                section.lectures = section.lectures.map((lecture, lectureIndex) => {
+                                    if (!lecture.order) {
+                                        lecture.order = lectureIndex + 1;
+                                    }
+
+                                    // Handle quiz lectures properly
+                                    if (lecture.type === 'quiz') {
+                                        // Convert frontend quiz format to backend format
+                                        const quizQuestions = (lecture.questions || []).map(q => ({
+                                            question: q.text || '',
+                                            type: q.type === 'single-choice' ? 'single' : 'multiple',
+                                            options: (q.options || []).map(opt => opt.text || ''),
+                                            correctAnswers: (q.options || [])
+                                                .map((opt, idx) => opt.isCorrect ? idx : null)
+                                                .filter(idx => idx !== null)
+                                        }));
+
+                                        lecture.quiz = {
+                                            isGraded: lecture.graded || false,
+                                            passingScore: lecture.graded ? (lecture.passingScore || 75) : 0,
+                                            questions: quizQuestions
+                                        };
+
+                                        // Remove frontend-specific fields
+                                        delete lecture.questions;
+                                        delete lecture.graded;
+                                        delete lecture.passingScore;
+                                    }
+
+                                    // Handle note lectures properly
+                                    if (lecture.type === 'note' && lecture.content) {
+                                        // Convert frontend note format to backend format
+                                        lecture.note = {
+                                            content: lecture.content,
+                                            attachments: lecture.attachments || []
+                                        };
+
+                                        // Remove frontend-specific field
+                                        delete lecture.content;
+                                    }
+
+                                    return lecture;
+                                });
+                            }
+                            
+                            return section;
+                        });
+                        course.sections = sections;
+                    }
+                } catch (e) {
+                    console.log('Error parsing sections:', e);
+                    // If sections can't be parsed, just ignore them for now
+                }
+            }
+
+            // Handle file uploads
+            if (req.files) {
+                if (req.files.thumbnail) {
+                    course.thumbnail = {
+                        url: `/uploads/course-posters/${req.files.thumbnail[0].filename}`,
+                        publicId: req.files.thumbnail[0].filename
+                    };
+                }
+                
+                if (req.files.banner) {
+                    course.banner = {
+                        url: `/uploads/course-banners/${req.files.banner[0].filename}`,
+                        publicId: req.files.banner[0].filename
+                    };
+                }
+                
+                if (req.files.demoVideo) {
+                    course.demoVideo = {
+                        url: `/uploads/demo-videos/${req.files.demoVideo[0].filename}`,
+                        publicId: req.files.demoVideo[0].filename
+                    };
+                }
+            }
+
+            // Update the slug if title changed
+            if (course.title) {
+                const newSlug = course.title.toLowerCase()
+                    .replace(/[^\w\s-]/g, '')
+                    .replace(/\s+/g, '-')
+                    .trim();
+                
+                // Only update slug if it's different and not already taken by another course
+                if (newSlug !== course.slug) {
+                    const existingCourse = await Course.findOne({ slug: newSlug, _id: { $ne: courseId } });
+                    if (!existingCourse) {
+                        course.slug = newSlug;
+                    }
+                    // If slug is taken, keep the old one
+                }
+            }
+
+            await course.save();
+
+            // Populate the course with category details before returning
+            await course.populate('category', 'name');
+            
+            // Transform quiz data from backend format to frontend format
+            if (course.sections && course.sections.length > 0) {
+                course.sections = course.sections.map(section => {
+                    if (section.lectures && section.lectures.length > 0) {
+                        section.lectures = section.lectures.map(lecture => {
+                            if (lecture.type === 'quiz' && lecture.quiz) {
+                                // Convert backend quiz format to frontend format
+                                lecture.questions = lecture.quiz.questions.map(q => ({
+                                    text: q.question,
+                                    type: q.type === 'single' ? 'single-choice' : 'multiple-choice',
+                                    options: q.options.map((optText, idx) => ({
+                                        text: optText,
+                                        isCorrect: q.correctAnswers.includes(idx)
+                                    }))
+                                }));
+                                
+                                lecture.graded = lecture.quiz.isGraded;
+                                lecture.passingScore = lecture.quiz.passingScore;
+                                
+                                // Remove backend quiz object to avoid duplication
+                                delete lecture.quiz;
+                            }
+
+                            if (lecture.type === 'note' && lecture.note) {
+                                // Convert backend note format to frontend format
+                                lecture.content = lecture.note.content || '';
+                                lecture.attachments = lecture.note.attachments || [];
+                                
+                                // Remove backend note object to avoid duplication
+                                delete lecture.note;
+                            }
+                            return lecture;
+                        });
+                    }
+                    return section;
+                });
+            }
+            
+            res.status(200).json({
+                message: 'Course draft updated successfully',
+                course: course
+            });
+        } catch (error) {
+            console.error('Update draft course error:', error);
+            res.status(500).json({ 
+                message: 'Failed to update course draft',
                 error: process.env.NODE_ENV === 'development' ? error.message : undefined
             });
         }
@@ -1227,11 +1459,74 @@ router.delete('/:courseId',
                 });
             }
 
-            console.log(`✅ Deleting course ${courseId}...`);
+            // STEP 1: Delete ALL videos from api.video and quiz attempts FIRST (before any MongoDB operations)
+            const VideoService = require('../services/VideoService');
+            const QuizAttempt = require('../models/QuizAttempt');
+            const videoService = new VideoService();
+            let deletedVideosCount = 0;
+            let deletedQuizAttemptsCount = 0;
+            const videoDeleteErrors = [];
+            
+            console.log(`🎥 Starting video cleanup for course ${courseId}...`);
+            
+            if (course.sections && course.sections.length > 0) {
+                for (const section of course.sections) {
+                    if (section.lectures && section.lectures.length > 0) {
+                        for (const lecture of section.lectures) {
+                            // Delete videos from api.video
+                            if (lecture.type === 'video' && lecture.video?.apiVideoId) {
+                                console.log(`🎥 DELETING video ${lecture.video.apiVideoId} from api.video...`);
+                                
+                                try {
+                                    const deleteResult = await videoService.deleteVideo(lecture.video.apiVideoId);
+                                    if (deleteResult.success) {
+                                        deletedVideosCount++;
+                                        console.log(`✅ Video ${lecture.video.apiVideoId} SUCCESSFULLY deleted from api.video`);
+                                    } else {
+                                        videoDeleteErrors.push(`Video ${lecture.video.apiVideoId}: ${deleteResult.error}`);
+                                        console.error(`❌ Failed to delete video ${lecture.video.apiVideoId}:`, deleteResult.error);
+                                    }
+                                } catch (error) {
+                                    videoDeleteErrors.push(`Video ${lecture.video.apiVideoId}: ${error.message}`);
+                                    console.error(`❌ Exception deleting video ${lecture.video.apiVideoId}:`, error);
+                                }
+                            }
+                            
+                            // Delete quiz attempts from MongoDB
+                            if (lecture.type === 'quiz') {
+                                console.log(`📝 DELETING quiz attempts for lecture ${lecture._id}...`);
+                                
+                                try {
+                                    const deleteResult = await QuizAttempt.deleteMany({
+                                        course: courseId,
+                                        lecture: lecture._id
+                                    });
+                                    deletedQuizAttemptsCount += deleteResult.deletedCount;
+                                    console.log(`✅ Deleted ${deleteResult.deletedCount} quiz attempts for lecture ${lecture._id}`);
+                                } catch (error) {
+                                    console.error(`❌ Failed to delete quiz attempts for lecture ${lecture._id}:`, error);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            console.log(`🎥 Video cleanup completed. Deleted: ${deletedVideosCount}, Errors: ${videoDeleteErrors.length}`);
+            
+            if (videoDeleteErrors.length > 0) {
+                console.warn(`⚠️ Some videos could not be deleted from api.video:`, videoDeleteErrors);
+            }
+
+            console.log(`✅ Deleting course ${courseId}... (${deletedVideosCount} videos and ${deletedQuizAttemptsCount} quiz attempts cleaned up)`);
             await Course.findByIdAndDelete(courseId);
             console.log(`✅ Course ${courseId} deleted successfully`);
 
-            res.json({ message: 'Course deleted successfully' });
+            res.json({ 
+                message: 'Course deleted successfully',
+                videosDeleted: deletedVideosCount,
+                quizAttemptsDeleted: deletedQuizAttemptsCount
+            });
         } catch (error) {
             console.error(`❌ Delete course error for ${req.params.courseId}:`, error);
             res.status(500).json({ message: 'Failed to delete course', error: error.message });
@@ -1406,8 +1701,8 @@ router.post('/upload-video',
                     videoFile.buffer,
                     videoFile.originalname,
                     (event) => {
-                        const progress = (event.currentChunk / event.chunksCount) * 100;
-                        console.log(`📹 API.video upload progress: ${progress.toFixed(1)}%`);
+                        const progress = Math.round((event.currentChunk / event.chunksCount) * 10000) / 100; // More precise rounding
+                        console.log(`📹 API.video upload progress: ${progress}% (chunk ${event.currentChunk}/${event.chunksCount})`);
                         
                         // Store progress in a way that can be accessed by SSE endpoint
                         global.uploadProgress = global.uploadProgress || {};
@@ -1447,11 +1742,10 @@ router.post('/upload-video',
                 videoFile.buffer,
                 videoFile.originalname,
                 (event) => {
-                    const progress = (event.currentChunk / event.chunksCount) * 100;
-                    console.log(`📹 API.video upload progress: ${progress.toFixed(1)}%`);
+                    const progress = Math.round((event.currentChunk / event.chunksCount) * 10000) / 100; // More precise rounding
+                    console.log(`📹 API.video upload progress: ${progress}% (chunk ${event.currentChunk}/${event.chunksCount})`);
                     
                     // Store progress in a way that can be accessed by SSE endpoint
-                    // We'll use a simple in-memory store for now
                     global.uploadProgress = global.uploadProgress || {};
                     global.uploadProgress[`${courseId}-${sectionIndex}-${lectureIndex}`] = progress;
                 }
@@ -1518,7 +1812,19 @@ router.post('/upload-video',
 );
 
 // Server-Sent Events endpoint for upload progress (with query parameter auth)
+// CORS middleware specifically for SSE endpoint
+const corsForSSE = (req, res, next) => {
+    if (process.env.NODE_ENV === 'development') {
+        res.header('Access-Control-Allow-Origin', '*');
+        res.header('Access-Control-Allow-Credentials', 'false');
+        res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    }
+    next();
+};
+
 router.get('/upload-progress/:courseId/:sectionIndex/:lectureIndex', 
+    corsForSSE,
     (req, res) => {
         const { courseId, sectionIndex, lectureIndex } = req.params;
         // const { token } = req.query; // REMOVED
@@ -1539,38 +1845,66 @@ router.get('/upload-progress/:courseId/:sectionIndex/:lectureIndex',
         
         const progressKey = `${courseId}-${sectionIndex}-${lectureIndex}`;
         
+        console.log(`📹 SSE connection request for progress tracking: ${progressKey}`);
+        console.log(`📹 Request headers:`, req.headers);
+        
         // Set headers for Server-Sent Events (allow all origins)
         res.writeHead(200, {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive',
             'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Credentials': 'false'
+            'Access-Control-Allow-Credentials': 'false',
+            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+            'Access-Control-Allow-Methods': 'GET, OPTIONS'
         });
 
         // Send initial progress
         global.uploadProgress = global.uploadProgress || {};
         const initialProgress = global.uploadProgress[progressKey] || 0;
-        res.write(`data: ${JSON.stringify({ progress: initialProgress })}\n\n`);
+        
+        // Send initial connection confirmation
+        res.write(`data: ${JSON.stringify({ 
+            progress: initialProgress, 
+            connected: true, 
+            timestamp: new Date().toISOString() 
+        })}\n\n`);
 
-        console.log(`📹 Progress tracking started for ${progressKey}, initial: ${initialProgress}%`);
+        console.log(`📹 SSE Progress tracking started for ${progressKey}, initial: ${initialProgress}%`);
+        console.log(`📹 SSE Initial message sent to client`);
 
         // Set up interval to check for progress updates
+        let lastSentProgress = initialProgress;
         const progressInterval = setInterval(() => {
             const currentProgress = global.uploadProgress[progressKey];
-            if (currentProgress !== undefined) {
-                res.write(`data: ${JSON.stringify({ progress: currentProgress })}\n\n`);
+            
+            // Debug: Always log the current state
+            if (currentProgress !== lastSentProgress) {
+                console.log(`📹 SSE Progress check: current=${currentProgress}, last=${lastSentProgress}, key=${progressKey}`);
+            }
+            
+            if (currentProgress !== undefined && currentProgress !== lastSentProgress) {
+                const roundedProgress = Math.round(currentProgress * 100) / 100; // Round to 2 decimals
+                const message = JSON.stringify({ 
+                    progress: roundedProgress, 
+                    timestamp: new Date().toISOString(),
+                    key: progressKey 
+                });
+                
+                res.write(`data: ${message}\n\n`);
+                console.log(`📹 SSE SENT progress update: ${roundedProgress}% to client`);
+                lastSentProgress = currentProgress;
                 
                 // If upload is complete, clean up and close connection
                 if (currentProgress >= 100) {
                     delete global.uploadProgress[progressKey];
                     clearInterval(progressInterval);
-                    res.write(`data: ${JSON.stringify({ progress: 100, complete: true })}\n\n`);
-                    console.log(`📹 Progress tracking completed for ${progressKey}`);
+                    res.write(`data: ${JSON.stringify({ progress: 100, complete: true, timestamp: new Date().toISOString() })}\n\n`);
+                    console.log(`📹 SSE Progress tracking completed for ${progressKey}`);
                     res.end();
                 }
             }
-        }, 500); // Check every 500ms
+        }, 250); // Check every 250ms for more responsive updates
 
         // Clean up on client disconnect
         req.on('close', () => {
@@ -1583,9 +1917,144 @@ router.get('/upload-progress/:courseId/:sectionIndex/:lectureIndex',
         setTimeout(() => {
             clearInterval(progressInterval);
             delete global.uploadProgress[progressKey];
-            console.log(`📹 Progress tracking timeout for ${progressKey}`);
+            console.log(`📹 SSE Progress tracking timeout for ${progressKey}`);
             res.end();
         }, 5 * 60 * 1000);
+    }
+);
+
+// Simple SSE test endpoint
+router.get('/test-sse', 
+    corsForSSE,
+    (req, res) => {
+        console.log('📹 SSE Test connection request');
+        
+        res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Credentials': 'false',
+            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+            'Access-Control-Allow-Methods': 'GET, OPTIONS'
+        });
+
+        // Send test messages every second
+        let counter = 0;
+        const testInterval = setInterval(() => {
+            counter++;
+            res.write(`data: ${JSON.stringify({ 
+                test: true, 
+                counter: counter,
+                message: `Test message ${counter}`,
+                timestamp: new Date().toISOString() 
+            })}\n\n`);
+            console.log(`📹 SSE Test message ${counter} sent`);
+            
+            if (counter >= 5) {
+                clearInterval(testInterval);
+                res.write(`data: ${JSON.stringify({ test: true, complete: true })}\n\n`);
+                res.end();
+            }
+        }, 1000);
+
+        req.on('close', () => {
+            clearInterval(testInterval);
+            console.log('📹 SSE Test connection closed');
+        });
+    }
+);
+
+// Progress status endpoint (for polling-based progress tracking)
+router.get('/progress-status/:progressKey',
+    (req, res) => {
+        const { progressKey } = req.params;
+        
+        global.uploadProgress = global.uploadProgress || {};
+        const currentProgress = global.uploadProgress[progressKey] || 0;
+        
+        console.log(`📹 Progress status request for ${progressKey}: ${currentProgress}%`);
+        
+        res.json({
+            progress: currentProgress,
+            key: progressKey,
+            timestamp: new Date().toISOString()
+        });
+    }
+);
+
+// Delete lecture (and clean up video from api.video)
+router.delete('/:courseId/sections/:sectionId/lectures/:lectureId',
+    authenticateToken,
+    requireVerifiedInstructor,
+    async (req, res) => {
+        try {
+            const { courseId, sectionId, lectureId } = req.params;
+            
+            const course = await Course.findById(courseId);
+            if (!course) {
+                return res.status(404).json({ message: 'Course not found' });
+            }
+
+            // Check ownership
+            if (course.instructor.toString() !== req.user._id.toString()) {
+                return res.status(403).json({ message: 'Access denied' });
+            }
+
+            const section = course.sections.id(sectionId);
+            if (!section) {
+                return res.status(404).json({ message: 'Section not found' });
+            }
+
+            const lecture = section.lectures.id(lectureId);
+            if (!lecture) {
+                return res.status(404).json({ message: 'Lecture not found' });
+            }
+
+            // STEP 1: Delete video from api.video FIRST (before MongoDB operations)
+            let videoDeleted = false;
+            let videoDeleteError = null;
+            
+            if (lecture.type === 'video' && lecture.video?.apiVideoId) {
+                console.log(`🎥 DELETING video ${lecture.video.apiVideoId} from api.video FIRST...`);
+                
+                try {
+                    const VideoService = require('../services/VideoService');
+                    const videoService = new VideoService();
+                    const deleteResult = await videoService.deleteVideo(lecture.video.apiVideoId);
+                    
+                    if (deleteResult.success) {
+                        videoDeleted = true;
+                        console.log(`✅ Video ${lecture.video.apiVideoId} SUCCESSFULLY deleted from api.video`);
+                    } else {
+                        videoDeleteError = deleteResult.error;
+                        console.error(`❌ Failed to delete video ${lecture.video.apiVideoId}:`, deleteResult.error);
+                    }
+                } catch (error) {
+                    videoDeleteError = error.message;
+                    console.error(`❌ Exception deleting video ${lecture.video.apiVideoId}:`, error);
+                }
+            }
+
+            // STEP 2: Remove lecture from MongoDB (after video deletion attempt)
+            console.log(`📝 Removing lecture ${lectureId} from MongoDB...`);
+            lecture.deleteOne();
+            await course.save();
+
+            res.json({
+                message: 'Lecture deleted successfully',
+                videoDeleted: videoDeleted,
+                videoDeleteError: videoDeleteError,
+                lectureId: lectureId,
+                deletionSteps: {
+                    videoDeleted: videoDeleted,
+                    mongoDbDeleted: true
+                }
+            });
+        } catch (error) {
+            console.error('Delete lecture error:', error);
+            res.status(500).json({ message: 'Failed to delete lecture' });
+        }
     }
 );
 
