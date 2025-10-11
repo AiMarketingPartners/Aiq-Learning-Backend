@@ -205,24 +205,41 @@ router.get('/overview', authenticateToken, async (req, res) => {
 
         const totalEnrollments = enrollments.length;
         const completedCourses = enrollments.filter(e => e.completedAt).length;
+        
+        // Safely calculate progress and time spent with fallbacks
         const averageProgress = totalEnrollments > 0 
-            ? enrollments.reduce((sum, e) => sum + e.progress.overallProgress, 0) / totalEnrollments 
+            ? enrollments.reduce((sum, e) => {
+                const progress = e.progress?.overallProgress || 0;
+                return sum + progress;
+            }, 0) / totalEnrollments 
             : 0;
-        const totalTimeSpent = enrollments.reduce((sum, e) => sum + e.progress.totalTimeSpent, 0);
-
+            
+        const totalTimeSpent = enrollments.reduce((sum, e) => {
+            const timeSpent = e.progress?.totalTimeSpent || 0;
+            return sum + timeSpent;
+        }, 0);
+        
         // Get certificates
         const certificates = await Certificate.find({ user: req.user._id })
             .populate('course', 'title thumbnail')
             .sort({ issuedAt: -1 });
+            
+        console.log('📊 Dashboard overview calculation:', {
+            userId: req.user._id,
+            totalEnrollments,
+            completedCourses,
+            averageProgress,
+            totalTimeSpent,
+            certificatesCount: certificates.length
+        });
 
         res.json({
-            summary: {
-                totalEnrollments,
-                completedCourses,
-                inProgressCourses: totalEnrollments - completedCourses,
-                averageProgress: Math.round(averageProgress),
-                totalTimeSpent: Math.round(totalTimeSpent / 3600), // Convert to hours
-                certificatesEarned: certificates.length
+            overview: {
+                totalEnrolled: totalEnrollments,
+                totalCompleted: completedCourses,
+                totalCertificates: certificates.length,
+                totalWatchTime: totalTimeSpent, // Keep in seconds, frontend converts to hours
+                overallProgress: Math.round(averageProgress)
             },
             recentEnrollments: enrollments.slice(0, 5),
             certificates: certificates.slice(0, 5)
