@@ -140,47 +140,46 @@ router.get('/my-courses', authenticateToken, requireRole(['learner']), async (re
             .limit(parseInt(limit))
             .sort({ enrolledAt: -1 });
 
-        // Get progress for each enrollment
-        const Progress = require('../models/Progress');
-        const coursesWithProgress = await Promise.all(
-            enrollments.map(async (enrollment) => {
-                const progress = await Progress.findOne({
-                    user: req.user._id,
-                    course: enrollment.course._id
-                });
+        // Use enrollment progress directly (consistent with other endpoints)
+        const coursesWithProgress = enrollments.map((enrollment) => {
+            // Calculate total lectures for additional info
+            const totalLectures = enrollment.course.sections ? enrollment.course.sections.reduce((total, section) => 
+                total + (section.lectures ? section.lectures.length : 0), 0
+            ) : 0;
 
-                const totalLectures = enrollment.course.sections.reduce((total, section) => 
-                    total + section.lectures.length, 0
-                );
+            const completedLectures = enrollment.progress.completedLessons ? enrollment.progress.completedLessons.length : 0;
+            
+            // Format time spent
+            const timeSpent = enrollment.progress.totalTimeSpent || 0;
+            const timeSpentFormatted = Math.floor(timeSpent / 3600) + 'h ' + Math.floor((timeSpent % 3600) / 60) + 'm';
 
-                const completedLectures = progress ? progress.completedLectures.length : 0;
-                const completionPercentage = totalLectures > 0 ? Math.round((completedLectures / totalLectures) * 100) : 0;
-
-                // Calculate time spent (you might want to track this more accurately)
-                const timeSpent = progress ? progress.timeSpent || 0 : 0;
-                const timeSpentFormatted = Math.floor(timeSpent / 3600) + 'h ' + Math.floor((timeSpent % 3600) / 60) + 'm';
-
-                // Get current lecture info
-                let currentLecture = null;
-                if (progress && progress.currentLecture) {
-                    currentLecture = progress.currentLecture;
+            // Get current lecture info from lastAccessedLesson
+            let currentLecture = 'Not started';
+            if (enrollment.progress.lastAccessedLesson) {
+                const { sectionIndex, lessonIndex } = enrollment.progress.lastAccessedLesson;
+                if (enrollment.course.sections && enrollment.course.sections[sectionIndex] && 
+                    enrollment.course.sections[sectionIndex].lectures && 
+                    enrollment.course.sections[sectionIndex].lectures[lessonIndex]) {
+                    currentLecture = enrollment.course.sections[sectionIndex].lectures[lessonIndex].title;
                 }
+            }
 
-                return {
-                    _id: enrollment._id,
-                    course: enrollment.course,
-                    progress: {
-                        completionPercentage,
-                        currentLecture: currentLecture || 'Not started',
-                        totalLectures,
-                        completedLectures
-                    },
-                    enrolledAt: enrollment.enrolledAt,
-                    lastAccessed: enrollment.lastAccessed || enrollment.enrolledAt,
-                    timeSpent: timeSpentFormatted
-                };
-            })
-        );
+            return {
+                _id: enrollment._id,
+                course: enrollment.course,
+                progress: {
+                    overallProgress: enrollment.progress.overallProgress || 0, // Use consistent field name
+                    completionPercentage: enrollment.progress.overallProgress || 0, // Keep for backward compatibility
+                    currentLecture,
+                    totalLectures,
+                    completedLectures
+                },
+                completed: !!enrollment.completedAt,
+                enrolledAt: enrollment.enrolledAt,
+                lastAccessed: enrollment.lastAccessed || enrollment.enrolledAt,
+                timeSpent: timeSpentFormatted
+            };
+        });
 
         const total = await Enrollment.countDocuments(filter);
 

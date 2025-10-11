@@ -138,6 +138,91 @@ router.post('/lesson-complete', authenticateToken, [
     }
 });
 
+// Unmark lesson as completed
+router.post('/lesson-uncomplete', authenticateToken, [
+    body('courseId').isMongoId().withMessage('Valid course ID required'),
+    body('sectionId').optional().isMongoId().withMessage('Valid section ID required'),
+    body('lectureId').optional().isMongoId().withMessage('Valid lecture ID required'),
+    body('sectionIndex').optional().isNumeric().withMessage('Valid section index required'),
+    body('lessonIndex').optional().isNumeric().withMessage('Valid lesson index required'),
+    body('timeSpent').optional().isNumeric().withMessage('Time spent must be a number'),
+    handleValidationErrors
+], async (req, res) => {
+    try {
+        const { courseId, sectionId, lectureId, sectionIndex: providedSectionIndex, lessonIndex: providedLessonIndex, timeSpent } = req.body;
+
+        // Find enrollment
+        const enrollment = await Enrollment.findOne({
+            user: req.user._id,
+            course: courseId,
+            isActive: true
+        }).populate('course');
+
+        if (!enrollment) {
+            return res.status(404).json({ message: 'Enrollment not found' });
+        }
+
+        // Determine sectionIndex and lessonIndex
+        let sectionIndex = providedSectionIndex;
+        let lessonIndex = providedLessonIndex;
+
+        // If IDs are provided instead of indices, find the indices
+        if ((sectionId || lectureId) && enrollment.course.sections) {
+            for (let sIdx = 0; sIdx < enrollment.course.sections.length; sIdx++) {
+                const section = enrollment.course.sections[sIdx];
+                
+                if (sectionId && section._id.toString() === sectionId) {
+                    sectionIndex = sIdx;
+                }
+                
+                if (lectureId && section.lectures) {
+                    for (let lIdx = 0; lIdx < section.lectures.length; lIdx++) {
+                        const lecture = section.lectures[lIdx];
+                        if (lecture._id.toString() === lectureId) {
+                            sectionIndex = sIdx;
+                            lessonIndex = lIdx;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Validate that we have valid indices
+        if (sectionIndex === undefined || lessonIndex === undefined) {
+            return res.status(400).json({ message: 'Could not determine section and lesson indices' });
+        }
+
+        // Remove lesson from completed lessons
+        enrollment.progress.completedLessons = enrollment.progress.completedLessons.filter(
+            lesson => !(lesson.sectionIndex === sectionIndex && lesson.lessonIndex === lessonIndex)
+        );
+
+        // Subtract time spent if provided
+        if (timeSpent && enrollment.progress.totalTimeSpent >= timeSpent) {
+            enrollment.progress.totalTimeSpent -= timeSpent;
+        }
+
+        // Recalculate progress
+        await enrollment.calculateProgress();
+        await enrollment.save();
+
+        // If course was completed, mark as incomplete
+        if (enrollment.completedAt) {
+            enrollment.completedAt = undefined;
+            await enrollment.save();
+        }
+
+        res.json({
+            message: 'Lesson unmarked as completed',
+            progress: enrollment.progress
+        });
+    } catch (error) {
+        console.error('Unmark lesson complete error:', error);
+        res.status(500).json({ message: 'Failed to unmark lesson as completed' });
+    }
+});
+
 // Get user progress for a course
 router.get('/course/:courseId', authenticateToken, async (req, res) => {
     try {
@@ -157,7 +242,8 @@ router.get('/course/:courseId', authenticateToken, async (req, res) => {
         const course = enrollment.course;
         const progressDetails = {
             overallProgress: enrollment.progress.overallProgress,
-            completedLessons: enrollment.progress.completedLessons.length,
+            completedLessons: enrollment.progress.completedLessons, // Return the actual array
+            completedLessonsCount: enrollment.progress.completedLessons.length, // Also provide count
             totalLessons: course.totalLessons,
             totalTimeSpent: enrollment.progress.totalTimeSpent,
             lastAccessedLesson: enrollment.progress.lastAccessedLesson,
