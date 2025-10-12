@@ -9,6 +9,30 @@ const router = express.Router();
 const certificateService = new CertificateService();
 
 // Get user's certificates
+router.get('/', authenticateToken, async (req, res) => {
+    try {
+        const certificates = await Certificate.find({ user: req.user._id })
+            .populate('course', 'title thumbnail instructor category')
+            .populate({
+                path: 'course',
+                populate: {
+                    path: 'instructor',
+                    select: 'name profile.avatar'
+                }
+            })
+            .sort({ issuedAt: -1 });
+
+        res.json({
+            success: true,
+            certificates
+        });
+    } catch (error) {
+        console.error('Get certificates error:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch certificates' });
+    }
+});
+
+// Get user's certificates with pagination
 router.get('/my-certificates', authenticateToken, async (req, res) => {
     try {
         const { page = 1, limit = 10 } = req.query;
@@ -186,8 +210,41 @@ router.post('/generate', authenticateToken, requireRole(['admin', 'instructor'])
     }
 });
 
-// Get course certificates (instructor/admin only)
-router.get('/course/:courseId', authenticateToken, requireRole(['instructor', 'admin']), async (req, res) => {
+// Get learner's certificate for a specific course
+router.get('/course/:courseId', authenticateToken, async (req, res) => {
+    try {
+        const { courseId } = req.params;
+
+        // Find certificate for this user and course
+        const certificate = await Certificate.findOne({ 
+            user: req.user._id, 
+            course: courseId 
+        })
+        .populate('course', 'title instructor category')
+        .populate('user', 'name email');
+
+        if (!certificate) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Certificate not found for this course' 
+            });
+        }
+
+        res.json({
+            success: true,
+            certificate
+        });
+    } catch (error) {
+        console.error('Get user course certificate error:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Failed to fetch certificate' 
+        });
+    }
+});
+
+// Get all course certificates (instructor/admin only)
+router.get('/course/:courseId/all', authenticateToken, requireRole(['instructor', 'admin']), async (req, res) => {
     try {
         const { courseId } = req.params;
         const { page = 1, limit = 10 } = req.query;
@@ -245,32 +302,85 @@ router.get('/check-eligibility/:courseId', authenticateToken, async (req, res) =
     }
 });
 
-// Generate certificate for completed course
-router.post('/generate/:courseId', authenticateToken, requireRole(['learner']), async (req, res) => {
+// Generate certificate for completed course (simple version)
+router.post('/generate/:courseId', authenticateToken, async (req, res) => {
     try {
-        const result = await certificateService.generateCertificate(
-            req.user._id, 
-            req.params.courseId,
-            req.body
-        );
+        const { courseId } = req.params;
+        const userId = req.user._id;
 
-        if (result.success) {
-            res.status(201).json({
+        // Check if certificate already exists
+        const existingCertificate = await Certificate.findOne({
+            user: userId,
+            course: courseId
+        });
+
+        if (existingCertificate) {
+            return res.status(200).json({
                 success: true,
-                message: 'Certificate generated successfully',
-                certificate: result.certificate
-            });
-        } else {
-            res.status(400).json({
-                success: false,
-                message: result.error
+                message: 'Certificate already exists',
+                certificate: existingCertificate
             });
         }
+
+        // Check if user has completed the course
+        const enrollment = await Enrollment.findOne({
+            user: userId,
+            course: courseId,
+            completedAt: { $exists: true }
+        });
+
+        if (!enrollment) {
+            return res.status(400).json({
+                success: false,
+                message: 'Course not completed yet'
+            });
+        }
+
+        // Get course details
+        const course = await Course.findById(courseId);
+        if (!course) {
+            return res.status(404).json({
+                success: false,
+                message: 'Course not found'
+            });
+        }
+
+        // Generate certificate ID manually to ensure it's set
+        const timestamp = Date.now();
+        const random = Math.random().toString(36).substring(2, 8).toUpperCase();
+        const certificateId = `CERT-${timestamp}-${random}`;
+
+        // Create the certificate
+        const certificate = new Certificate({
+            user: userId,
+            course: courseId,
+            certificateId: certificateId, // Set explicitly
+            completedAt: enrollment.completedAt,
+            grade: 'Pass', // Use valid enum value
+            skills: [],
+            metadata: {
+                totalDuration: course.totalDuration || 0,
+                completionTime: Math.ceil((enrollment.completedAt - enrollment.enrolledAt) / (1000 * 60 * 60 * 24)),
+                finalScore: 100
+            }
+        });
+
+        await certificate.save();
+        
+        // Populate the certificate with course and user details
+        await certificate.populate('course', 'title instructor category');
+        await certificate.populate('user', 'name email');
+
+        res.status(201).json({
+            success: true,
+            message: 'Certificate generated successfully',
+            certificate
+        });
     } catch (error) {
         console.error('Generate certificate error:', error);
         res.status(500).json({
             success: false,
-            message: 'Server error generating certificate'
+            message: 'Failed to generate certificate'
         });
     }
 });
